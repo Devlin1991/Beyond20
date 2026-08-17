@@ -479,6 +479,33 @@ const character_settings = {
         "hidden": true,
         "default": false
     },
+    "type-damage-breakdown": {
+        "title": "Damage type breakdown in total",
+        "description": "Show damage breakdown by damage type (e.g. 15 Slashing + 31 Fire) in the total damage summary",
+        "type": "combobox",
+        "default": "enabled",
+        "choices": {
+            "enabled": "Show damage type breakdown",
+            "disabled": "Numeric total only"
+        }
+    },
+    "pyromaniac-fire-dice-only": {
+        "title": "Pyromaniac: Limit flares to Fire damage dice",
+        "description": "When enabled, Pyromaniac flares can only trigger on dice that deal Fire damage, rather than any die in an attack that includes Fire damage.",
+        "type": "boolean",
+        "default": false
+    },
+    "savage-attacker": {
+        "title": "Savage Attacker Feat",
+        "description": "Once per turn when you hit with a weapon attack, roll the weapon's damage dice twice and use the higher roll.",
+        "type": "combobox",
+        "default": "query",
+        "choices": {
+            "query": "Query on each weapon attack",
+            "enabled": "Always use Savage Attacker",
+            "disabled": "Disabled"
+        }
+    },
     "versatile-choice": {
         "title": "Versatile weapon choice",
         "description": "How to roll damage for Versatile weapons",
@@ -487,7 +514,8 @@ const character_settings = {
         "choices": {
             "both": "Roll both damages separately",
             "one": "Use weapon One-handed",
-            "two": "Use weapon Two-handed"
+            "two": "Use weapon Two-handed",
+            "query": "Query 1-Handed / 2-Handed"
         }
     },
     "toll-choice": {

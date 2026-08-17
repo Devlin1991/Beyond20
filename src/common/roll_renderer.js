@@ -8,6 +8,38 @@ class DAMAGE_FLAGS {
     static get CONDITIONAL() { return 0x20; }
 }
 
+class ExplodingRule {
+    constructor({ name, limit, damageTypeFilter = null, triggerFn = (faces, val) => val === faces }) {
+        this.name = name;
+        this.remaining = limit;
+        this.damageTypeFilter = damageTypeFilter;
+        this.triggerFn = triggerFn;
+    }
+
+    canTrigger(dmgType, faces, val) {
+        if (this.remaining <= 0) return false;
+        if (this.damageTypeFilter) {
+            const matches = typeof this.damageTypeFilter === "function"
+                ? this.damageTypeFilter(dmgType)
+                : String(dmgType || "").toLowerCase().includes(String(this.damageTypeFilter).toLowerCase());
+            if (!matches) return false;
+        }
+        return this.triggerFn(faces, val);
+    }
+}
+
+const BLADE_CANTRIPS_LIST = ["Burning Blade", "Arc Blade", "True Strike", "Frigid Blade", "Green-Flame Blade", "Booming Blade"];
+
+function isPrimarySpellOrFeat(dmg_type) {
+    if (!dmg_type) return false;
+    return BLADE_CANTRIPS_LIST.some(k => dmg_type.includes(k)) ||
+           dmg_type.includes("Pyromaniac") ||
+           dmg_type.includes("Sneak Attack") ||
+           dmg_type.includes("Flame Tongue") ||
+           dmg_type.includes("ablaze") ||
+           dmg_type.includes("Savage Attacker");
+}
+
 class Beyond20RollRenderer {
     constructor(roller, prompter, displayer) {
         this._roller = roller;
@@ -313,9 +345,43 @@ class Beyond20RollRenderer {
         // - and the 2 non-critical damages are not 1 handed + 2 handed
         let add_totals = damage_rolls.filter((r) => (r[2] & DAMAGE_FLAGS.CRITICAL) == 0).length > 1 ||
                         damage_rolls.filter((r) => (r[2] & DAMAGE_FLAGS.CRITICAL) != 0).length > 1;
-        const total_damages = {}
+        const total_damages = {};
         let conditionalFormula = "";
+        const nonCritBy1H = {}, nonCritBy2H = {}, nonCritByReg = {};
+        const critBy1H = {}, critBy2H = {}, critByReg = {};
+        const totalBy1H = {}, totalBy2H = {}, totalByReg = {};
+
+        function extractCleanType(name) {
+            let clean = String(name || "").replace(/:\s*$/, "").trim();
+            if (clean.includes("(")) {
+                clean = clean.split("(")[0].trim();
+            }
+            clean = clean.replace(/(\s*Damage)+$/i, "").trim();
+            return clean || "Damage";
+        }
+
         for (let [roll_name, roll, flags] of damage_rolls) {
+            const orig_name = roll_name;
+            if (typeof (roll) !== "string" && !(flags & DAMAGE_FLAGS.CONDITIONAL)) {
+                const rawType = extractCleanType(orig_name);
+                const isCrit = (flags & DAMAGE_FLAGS.CRITICAL) !== 0;
+                const is1HOnly = (flags & DAMAGE_FLAGS.REGULAR) && !(flags & DAMAGE_FLAGS.VERSATILE);
+                const is2HOnly = (flags & DAMAGE_FLAGS.VERSATILE) && !(flags & DAMAGE_FLAGS.REGULAR);
+
+                totalByReg[rawType] = (totalByReg[rawType] || 0) + roll.total;
+                if (!is2HOnly) totalBy1H[rawType] = (totalBy1H[rawType] || 0) + roll.total;
+                if (!is1HOnly) totalBy2H[rawType] = (totalBy2H[rawType] || 0) + roll.total;
+
+                if (isCrit) {
+                    critByReg[rawType] = (critByReg[rawType] || 0) + roll.total;
+                    if (!is2HOnly) critBy1H[rawType] = (critBy1H[rawType] || 0) + roll.total;
+                    if (!is1HOnly) critBy2H[rawType] = (critBy2H[rawType] || 0) + roll.total;
+                } else {
+                    nonCritByReg[rawType] = (nonCritByReg[rawType] || 0) + roll.total;
+                    if (!is2HOnly) nonCritBy1H[rawType] = (nonCritBy1H[rawType] || 0) + roll.total;
+                    if (!is1HOnly) nonCritBy2H[rawType] = (nonCritBy2H[rawType] || 0) + roll.total;
+                }
+            }
             const is_total = !add_totals && (flags & DAMAGE_FLAGS.CRITICAL) == 0;
             let roll_html = "";
             if (typeof (roll) === "string")
@@ -349,9 +415,12 @@ class Beyond20RollRenderer {
                     // HACK Alert: crappy code;
                     const regular = flags & DAMAGE_FLAGS.CRITICAL ? "Critical Damage" : "Damage";
                     const versatile = flags & DAMAGE_FLAGS.CRITICAL ? "Critical 2-Handed Damage" : "2-Handed Damage";
-                    if (total_damages[regular] !== undefined)
+                    const is1HandOnly = (flags & DAMAGE_FLAGS.REGULAR) && !(flags & DAMAGE_FLAGS.VERSATILE);
+                    const is2HandOnly = (flags & DAMAGE_FLAGS.VERSATILE) && !(flags & DAMAGE_FLAGS.REGULAR);
+
+                    if (!is2HandOnly && total_damages[regular] !== undefined)
                         total_damages[regular] += " + " + String(roll.total);
-                    if (total_damages[versatile] !== undefined)
+                    if (!is1HandOnly && total_damages[versatile] !== undefined)
                         total_damages[versatile] += " + " + String(roll.total);
                     continue;
                 } else {
@@ -483,7 +552,30 @@ class Beyond20RollRenderer {
                 const rest = key.substring(9);
                 label = `Total${rest} Combined`;
             }
-            html += `<div class='${total_classes}'><b>${label}: </b>${roll_html}</div>`;
+            let typeBreakdownStr = "";
+            if ((this._settings["type-damage-breakdown"] || "enabled") === "enabled") {
+                let targetDict = {};
+                if (key.includes("Combined")) {
+                    if (key.includes("1 Handed") || key.includes("1-Handed")) targetDict = totalBy1H;
+                    else if (key.includes("2-Handed") || key.includes("2 Handed")) targetDict = totalBy2H;
+                    else targetDict = totalByReg;
+                } else if (key.includes("Critical")) {
+                    if (key.includes("1-Handed") || key.includes("1 Handed")) targetDict = critBy1H;
+                    else if (key.includes("2-Handed") || key.includes("2 Handed")) targetDict = critBy2H;
+                    else targetDict = critByReg;
+                } else {
+                    if (key.includes("1-Handed") || key.includes("1 Handed")) targetDict = nonCritBy1H;
+                    else if (key.includes("2-Handed") || key.includes("2 Handed")) targetDict = nonCritBy2H;
+                    else targetDict = nonCritByReg;
+                }
+
+                const types = Object.keys(targetDict);
+                if (types.length > 1) {
+                    typeBreakdownStr = ` <span class='beyond20-damage-breakdown'>(${types.map(t => `${targetDict[t]} ${t}`).join(" + ")})</span>`;
+                }
+            }
+
+            html += `<div class='${total_classes}'><b>${label}: </b>${roll_html}${typeBreakdownStr}</div>`;
         }
 
         if (request.damages && request.damages.length > 0 && 
@@ -737,7 +829,7 @@ class Beyond20RollRenderer {
                     const base_type = dmg_type.split("(")[0].trim();
                     const isVersatileHand = dmg_type.includes("(1-Hand)") || dmg_type.includes("(2-Hand)");
                     const isHpVariant = dmg_type.includes("(Full HP)") || dmg_type.includes("(Missing HP)");
-                    if (!isVersatileHand && !isHpVariant) {
+                    if (!isVersatileHand && !isHpVariant && !isPrimarySpellOrFeat(dmg_type)) {
                         if (seen_other_damages[base_type]) {
                             damage_flags = DAMAGE_FLAGS.CONDITIONAL;
                         }
@@ -858,7 +950,7 @@ class Beyond20RollRenderer {
                         const base_type = dmg_type.split("(")[0].trim();
                         const isVersatileHand = dmg_type.includes("(1-Hand)") || dmg_type.includes("(2-Hand)");
                         const isHpVariant = dmg_type.includes("(Full HP)") || dmg_type.includes("(Missing HP)");
-                        if (!isVersatileHand && !isHpVariant) {
+                        if (!isVersatileHand && !isHpVariant && !isPrimarySpellOrFeat(dmg_type)) {
                             if (seen_critical_other_damages[base_type]) {
                                 damage_flags = DAMAGE_FLAGS.CONDITIONAL;
                             }
@@ -880,67 +972,45 @@ class Beyond20RollRenderer {
                 await this._roller.resolveRolls(request.name, critical_damage_rolls, request);
             }
             
-            // Process Sorcerous Burst after critical hits so we can deploy bursts out of the critical
-            // damage dice as well.
-            if (request.name.includes("Sorcerous Burst")) {
-                const mods = request.character.spell_modifiers;
+            // Process exploding dice rules (Pyromaniac, Burning Blade, Sorcerous Burst, etc.)
+            const activeRules = [];
+            const charObj = request.character || {};
+            const feats = charObj.feats || [];
+            const hasPyromaniac = feats.some(f => String(f).toLowerCase().includes("pyromaniac"));
+
+            if (hasPyromaniac) {
+                const hasFireDamage = damage_rolls.some(([dmgType, rollObj, flags]) => 
+                    !(flags & DAMAGE_FLAGS.CONDITIONAL) && String(dmgType || "").toLowerCase().includes("fire")
+                );
+                if (hasFireDamage) {
+                    const profBonus = parseInt(charObj.proficiency) || 2;
+                    const fireOnly = (this._settings["pyromaniac-fire-dice-only"] || false) === true;
+                    activeRules.push(new ExplodingRule({
+                        name: "Pyromaniac Flare",
+                        limit: profBonus,
+                        damageTypeFilter: fireOnly ? "Fire" : null
+                    }));
+                }
+            }
+
+            if (request.name && (request.name.includes("Sorcerous Burst") || request.name.includes("Burning Blade"))) {
+                const mods = charObj.spell_modifiers || {};
                 const sorcererMod = Object.keys(mods).find(x => x.toLowerCase() === "sorcerer");
-                const mainDamage = damage_rolls.find((roll) => roll[2] === DAMAGE_FLAGS.REGULAR);
-                const critDamage = damage_rolls.find((roll) => roll[2] === (DAMAGE_FLAGS.REGULAR | DAMAGE_FLAGS.CRITICAL));
-                const critRule = parseInt(this._settings["critical-homebrew"] || CriticalRules.PHB);
-                const doubleForCrit = is_critical && [CriticalRules.PHB, CriticalRules.HOMEBREW_REROLL, CriticalRules.HOMEBREW_MOD].includes(critRule);
-
-                const faces = parseInt(mainDamage[1].dice[0].faces);
-                let burstCount = mainDamage[1].dice[0].rolls.filter(x => x.roll === faces).length;
-                if (critRule !== CriticalRules.HOMEBREW_MAX && critDamage) {
-                    burstCount += critDamage[1].dice[0].rolls.filter(x => x.roll === faces).length;
+                let selectedModifier = sorcererMod || Object.keys(mods)[0];
+                if (!sorcererMod && Object.keys(mods).length > 1) {
+                    const result = await this.queryGeneric("Spellcasting Ability Modifier", "Burst Ability Modifier", Object.keys(mods));
+                    selectedModifier = result !== null ? Object.keys(mods)[result] : Object.keys(mods)[0];
                 }
-                
-                if (burstCount > 0) {
-                    // Determine the selected modifier, prompt only if multiple options and no sorcerer
-                    let selectedModifier = sorcererMod || Object.keys(mods)[0];
-                    if (!sorcererMod && Object.keys(mods).length > 1) {
-                        const result = await this.queryGeneric("Spellcasting Ability Modifier", "Burst Ability Modifier", Object.keys(mods));
-                        selectedModifier = result !== null ? Object.keys(mods)[result] : Object.keys(mods)[0];
-                    }
-                    let burstRollsLeft = parseInt(mods[selectedModifier]);
-          
-                    const rollBurstDamage = async (burst) => {
-                        if (burstRollsLeft <= 0) {
-                            return [];
-                        }
-                        burst = Math.min(burst, burstRollsLeft);
-                        burstRollsLeft -= burst;
-                        const amount = doubleForCrit ? burst * 2 : burst;
-                        const burstRoll = this._roller.roll(`${amount}d${faces}`);
-                        burstRoll.setRollType("damage");
-                        const rolls = [burstRoll];
-                        await this._roller.resolveRolls(request.name, rolls, request);
-                        const newBurstCount = burstRoll.dice[0].rolls.filter(x => x.roll === faces).length;
-                        if (newBurstCount > 0) {
-                            rolls.push(...await rollBurstDamage(newBurstCount));
-                        }
-                        return rolls;
-                    }
-                    const burstRolls = await rollBurstDamage(burstCount);
-                    let burstRollCount = 1;
-                    let burstCriticalAmount = 0;
-                    for (let burstRoll of burstRolls) {
-                        damage_rolls.push([`Burst (${burstRollCount++})`, burstRoll, DAMAGE_FLAGS.ADDITIONAL]);
-                        // Accumulate critical damage if needed
-                        if (is_critical && critRule === CriticalRules.HOMEBREW_MAX) {
-                            burstCriticalAmount += burstRoll.dice.reduce((sum, die) => sum + (die.amount * die.faces), 0);
-                        }
-                    }
+                const maxBurst = parseInt(mods[selectedModifier]) || 3;
+                const ruleName = request.name.includes("Burning Blade") ? "Burning Blade Explode" : "Sorcerous Burst";
+                activeRules.push(new ExplodingRule({
+                    name: ruleName,
+                    limit: maxBurst
+                }));
+            }
 
-                    // Handle critical burst damage roll if needed
-                    if(is_critical && critRule === CriticalRules.HOMEBREW_MAX && burstCriticalAmount > 0) {
-                        const criticalRoll = this._roller.roll(burstCriticalAmount.toString());
-                        criticalRoll.setRollType("critical-damage");
-                        damage_rolls.push([`Burst Critical`, criticalRoll, DAMAGE_FLAGS.ADDITIONAL | DAMAGE_FLAGS.CRITICAL]);
-                        await this._roller.resolveRolls(request.name, [criticalRoll], request);
-                    }
-                }
+            if (activeRules.length > 0) {
+                await this.processAllExplodingDice(request, damage_rolls, is_critical, activeRules);
             }
         } else {
             // If no damages, still need to resolve to hit rolls
@@ -1140,6 +1210,75 @@ class Beyond20RollRenderer {
             const rname = request.name || request.type;
 
             return this.rollDice(request, rname + " (" + mod + ")", mod, {});
+        }
+    }
+
+    async processAllExplodingDice(request, damage_rolls, is_critical, activeRules) {
+        if (!activeRules || activeRules.length === 0 || damage_rolls.length === 0) return;
+
+        const critRule = parseInt(this._settings["critical-homebrew"] || CriticalRules.PHB);
+        const doubleForCrit = is_critical && [CriticalRules.PHB, CriticalRules.HOMEBREW_REROLL, CriticalRules.HOMEBREW_MOD].includes(critRule);
+
+        const queue = [];
+        for (const [dmgType, rollObj, flags] of damage_rolls) {
+            if (!rollObj || !rollObj.dice) continue;
+            if ((flags & DAMAGE_FLAGS.CRITICAL) !== 0 && critRule === CriticalRules.HOMEBREW_MAX) continue;
+
+            for (const d of rollObj.dice) {
+                for (const r of (d.rolls || [])) {
+                    if (!r.discarded) {
+                        queue.push({
+                            faces: parseInt(d.faces),
+                            val: parseInt(r.roll),
+                            dmgType: String(dmgType || ""),
+                            originFlags: flags
+                        });
+                    }
+                }
+            }
+        }
+
+        const burstCounters = {};
+
+        while (queue.length > 0) {
+            const die = queue.shift();
+
+            for (const rule of activeRules) {
+                if (rule.canTrigger(die.dmgType, die.faces, die.val)) {
+                    rule.remaining--;
+                    burstCounters[rule.name] = (burstCounters[rule.name] || 0) + 1;
+
+                    const amount = 1;
+                    const burstRoll = this._roller.roll(`${amount}d${die.faces}`);
+                    burstRoll.setRollType("damage");
+                    await this._roller.resolveRolls(request.name, [burstRoll], request);
+
+                    let burstFlags = DAMAGE_FLAGS.ADDITIONAL;
+                    if (die.originFlags & DAMAGE_FLAGS.REGULAR) burstFlags |= DAMAGE_FLAGS.REGULAR;
+                    if (die.originFlags & DAMAGE_FLAGS.VERSATILE) burstFlags |= DAMAGE_FLAGS.VERSATILE;
+                    if (die.originFlags & DAMAGE_FLAGS.CRITICAL) burstFlags |= DAMAGE_FLAGS.CRITICAL;
+
+                    const baseDmgType = die.dmgType.split("(")[0].trim().replace(/(\s*Damage)+$/i, "") || "Fire";
+                    const handTag = die.dmgType.includes("(1-Hand)") ? " (1-Hand)" : (die.dmgType.includes("(2-Hand)") ? " (2-Hand)" : "");
+                    const label = `${baseDmgType}${handTag} (${rule.name} #${burstCounters[rule.name]}) Damage`;
+                    damage_rolls.push([label, burstRoll, burstFlags]);
+
+                    const burstDmgType = (die.dmgType && die.dmgType.trim() !== "") ? die.dmgType : baseDmgType;
+
+                    for (const newDie of burstRoll.dice) {
+                        for (const newRoll of (newDie.rolls || [])) {
+                            if (!newRoll.discarded) {
+                                queue.push({
+                                    faces: parseInt(newDie.faces),
+                                    val: parseInt(newRoll.roll),
+                                    dmgType: burstDmgType,
+                                    originFlags: die.originFlags
+                                });
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

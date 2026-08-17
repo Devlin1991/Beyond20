@@ -244,6 +244,10 @@
     text-decoration: line-through;
     opacity: 0.5;
 }
+.beyond20-roll-detail-exploded {
+    text-decoration: underline dotted #d9534f;
+    font-weight: bold;
+}
 
 .beyond20-tooltip .beyond20-tooltip-content {
     display: none;

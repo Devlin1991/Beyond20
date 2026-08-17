@@ -134,6 +134,7 @@ class DNDBDice {
         this._modifiers = modifiers || "";
         this._reroll = { "active": false, "value": 0, "operator": "=" }
         this._dk = { "drop": false, "keep": false, "high": false, "amount": 0 }
+        this._explode = { "active": false, "value": this.faces, "operator": "=", "max": null }
         this._min = 0;
         if (modifiers != "") {
             const match_ro = modifiers.match(/r(=|<|<=|>|>=)([0-9]+)/);
@@ -141,6 +142,18 @@ class DNDBDice {
                 this._reroll.active = true;
                 this._reroll.operator = match_ro[1];
                 this._reroll.value = parseInt(match_ro[2]);
+            }
+            const match_ex = modifiers.match(/!(>=|>|<=|<|=)?([0-9]*)(?:m([0-9]+))?/);
+            if (match_ex) {
+                this._explode.active = true;
+                let op = match_ex[1] || "=";
+                if (op === ">") op = ">=";
+                if (op === "<") op = "<=";
+                this._explode.operator = op;
+                this._explode.value = match_ex[2] ? parseInt(match_ex[2]) : (this.faces || 1);
+                if (match_ex[3]) {
+                    this._explode.max = parseInt(match_ex[3]);
+                }
             }
             const match_dk = modifiers.match(/(dl|dh|kl|kh)([0-9]*)/);
             if (match_dk) {
@@ -209,6 +222,32 @@ class DNDBDice {
             }
             if (rerolls)
                 await this.rerollDice(rerolls);
+        }
+        if (this._explode.active) {
+            let exploded_count = 0;
+            const max_exploded = this._explode.max !== null ? this._explode.max : 100;
+            let i = 0;
+            while (i < this._rolls.length && exploded_count < max_exploded) {
+                let r = this._rolls[i];
+                if (!r.discarded) {
+                    const val = r.roll;
+                    const op = this._explode.operator;
+                    const target = this._explode.value;
+                    let triggers = false;
+                    if (op === "=" && val === target) triggers = true;
+                    else if (op === ">=" && val >= target) triggers = true;
+                    else if (op === "<=" && val <= target) triggers = true;
+                    else if (op === ">" && val > target) triggers = true;
+                    else if (op === "<" && val < target) triggers = true;
+
+                    if (triggers) {
+                        exploded_count++;
+                        const new_roll = this.rollSingleDie();
+                        this._rolls.splice(i + 1, 0, { "roll": new_roll, "exploded": true });
+                    }
+                }
+                i++;
+            }
         }
         // Look for drops && keeps;
         const dk_amount = this._dk.amount;
@@ -408,6 +447,8 @@ class DNDBRoll extends Beyond20BaseRoll {
                     result_class += die.roll == part.faces ? 'crit' : (die.roll == 1 ? 'fail' : 'normal');
                     if (die.discarded)
                         result_class += ' beyond20-roll-detail-discarded';
+                    if (die.exploded)
+                        result_class += ' beyond20-roll-detail-exploded';
                     tooltip += "<span class='beyond20-roll-die-result " + result_class + "'>" + die.roll + "</span>";
                 }
                 tooltip += "</div></div>";

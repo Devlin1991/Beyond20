@@ -50,6 +50,7 @@ function escapeRoll20Macro(text) {
 
 function genRoll(dice, modifiers = {}) {
     dice = dice.replace(/ro<=([0-9]+)/, "ro<$1");
+    dice = dice.replace(/!m[0-9]+/g, "!");
     dice = dice.replace(/(^|\s)+([^\s]+)min(\d+)([^\s+\-]*?)(?=[+\-\s]|$)/g, "$1{$2$4, 0d0 + $3}kh1");
     let roll = "[[" + dice;
     for (let m in modifiers) {
