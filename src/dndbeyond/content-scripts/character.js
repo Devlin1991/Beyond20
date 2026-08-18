@@ -1294,21 +1294,23 @@ async function handleSpecialWeaponAttacks(damages=[], damage_types=[], propertie
     const hasFeat = character.hasFeat("Savage Attacker") || character.hasFeat("Savage Attacker 2024");
     
     let useSavage = false;
-    if (savageSetting === "enabled") {
-        useSavage = true;
-    } else if (savageSetting !== "disabled" && (hasFeat || savageSetting === "query")) {
-        const savageChoice = await dndbeyondDiceRoller.queryGeneric(
-            "Savage Attacker",
-            "Use Savage Attacker (1/Turn) on this attack?",
-            {
-                "yes": "Use Savage Attacker (1/Turn)",
-                "no": "Do Not Use"
-            },
-            "use_savage_attacker",
-            ["yes", "no"]
-        );
-        if (savageChoice === "yes") {
+    if (hasFeat && savageSetting !== "disabled") {
+        if (savageSetting === "enabled") {
             useSavage = true;
+        } else if (savageSetting === "query") {
+            const savageChoice = await dndbeyondDiceRoller.queryGeneric(
+                "Savage Attacker",
+                "Use Savage Attacker (1/Turn) on this attack?",
+                {
+                    "yes": "Use Savage Attacker (1/Turn)",
+                    "no": "Do Not Use"
+                },
+                "use_savage_attacker",
+                ["yes", "no"]
+            );
+            if (savageChoice === "yes") {
+                useSavage = true;
+            }
         }
     }
 
