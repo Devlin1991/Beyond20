@@ -479,6 +479,16 @@ const character_settings = {
         "hidden": true,
         "default": false
     },
+    "type-damage-breakdown": {
+        "title": "Damage type breakdown in total",
+        "description": "Show damage breakdown by damage type (e.g. 15 Slashing + 31 Fire) in the total damage summary",
+        "type": "combobox",
+        "default": "enabled",
+        "choices": {
+            "enabled": "Show damage type breakdown",
+            "disabled": "Numeric total only"
+        }
+    },
     "versatile-choice": {
         "title": "Versatile weapon choice",
         "description": "How to roll damage for Versatile weapons",

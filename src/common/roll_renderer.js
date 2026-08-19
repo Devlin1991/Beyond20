@@ -313,9 +313,43 @@ class Beyond20RollRenderer {
         // - and the 2 non-critical damages are not 1 handed + 2 handed
         let add_totals = damage_rolls.filter((r) => (r[2] & DAMAGE_FLAGS.CRITICAL) == 0).length > 1 ||
                         damage_rolls.filter((r) => (r[2] & DAMAGE_FLAGS.CRITICAL) != 0).length > 1;
-        const total_damages = {}
+        const total_damages = {};
         let conditionalFormula = "";
+        const nonCritBy1H = {}, nonCritBy2H = {}, nonCritByReg = {};
+        const critBy1H = {}, critBy2H = {}, critByReg = {};
+        const totalBy1H = {}, totalBy2H = {}, totalByReg = {};
+
+        function extractCleanType(name) {
+            let clean = String(name || "").replace(/:\s*$/, "").trim();
+            if (clean.includes("(")) {
+                clean = clean.split("(")[0].trim();
+            }
+            clean = clean.replace(/(\s*Damage)+$/i, "").trim();
+            return clean || "Damage";
+        }
+
         for (let [roll_name, roll, flags] of damage_rolls) {
+            const orig_name = roll_name;
+            if (typeof (roll) !== "string" && !(flags & DAMAGE_FLAGS.CONDITIONAL)) {
+                const rawType = extractCleanType(orig_name);
+                const isCrit = (flags & DAMAGE_FLAGS.CRITICAL) !== 0;
+                const is1HOnly = (flags & DAMAGE_FLAGS.REGULAR) && !(flags & DAMAGE_FLAGS.VERSATILE);
+                const is2HOnly = (flags & DAMAGE_FLAGS.VERSATILE) && !(flags & DAMAGE_FLAGS.REGULAR);
+
+                totalByReg[rawType] = (totalByReg[rawType] || 0) + roll.total;
+                if (!is2HOnly) totalBy1H[rawType] = (totalBy1H[rawType] || 0) + roll.total;
+                if (!is1HOnly) totalBy2H[rawType] = (totalBy2H[rawType] || 0) + roll.total;
+
+                if (isCrit) {
+                    critByReg[rawType] = (critByReg[rawType] || 0) + roll.total;
+                    if (!is2HOnly) critBy1H[rawType] = (critBy1H[rawType] || 0) + roll.total;
+                    if (!is1HOnly) critBy2H[rawType] = (critBy2H[rawType] || 0) + roll.total;
+                } else {
+                    nonCritByReg[rawType] = (nonCritByReg[rawType] || 0) + roll.total;
+                    if (!is2HOnly) nonCritBy1H[rawType] = (nonCritBy1H[rawType] || 0) + roll.total;
+                    if (!is1HOnly) nonCritBy2H[rawType] = (nonCritBy2H[rawType] || 0) + roll.total;
+                }
+            }
             const is_total = !add_totals && (flags & DAMAGE_FLAGS.CRITICAL) == 0;
             let roll_html = "";
             if (typeof (roll) === "string")
@@ -349,9 +383,12 @@ class Beyond20RollRenderer {
                     // HACK Alert: crappy code;
                     const regular = flags & DAMAGE_FLAGS.CRITICAL ? "Critical Damage" : "Damage";
                     const versatile = flags & DAMAGE_FLAGS.CRITICAL ? "Critical 2-Handed Damage" : "2-Handed Damage";
-                    if (total_damages[regular] !== undefined)
+                    const is1HandOnly = (flags & DAMAGE_FLAGS.REGULAR) && !(flags & DAMAGE_FLAGS.VERSATILE);
+                    const is2HandOnly = (flags & DAMAGE_FLAGS.VERSATILE) && !(flags & DAMAGE_FLAGS.REGULAR);
+
+                    if (!is2HandOnly && total_damages[regular] !== undefined)
                         total_damages[regular] += " + " + String(roll.total);
-                    if (total_damages[versatile] !== undefined)
+                    if (!is1HandOnly && total_damages[versatile] !== undefined)
                         total_damages[versatile] += " + " + String(roll.total);
                     continue;
                 } else {
@@ -483,7 +520,30 @@ class Beyond20RollRenderer {
                 const rest = key.substring(9);
                 label = `Total${rest} Combined`;
             }
-            html += `<div class='${total_classes}'><b>${label}: </b>${roll_html}</div>`;
+            let typeBreakdownStr = "";
+            if ((this._settings["type-damage-breakdown"] || "enabled") === "enabled") {
+                let targetDict = {};
+                if (key.includes("Combined")) {
+                    if (key.includes("1 Handed") || key.includes("1-Handed")) targetDict = totalBy1H;
+                    else if (key.includes("2-Handed") || key.includes("2 Handed")) targetDict = totalBy2H;
+                    else targetDict = totalByReg;
+                } else if (key.includes("Critical")) {
+                    if (key.includes("1-Handed") || key.includes("1 Handed")) targetDict = critBy1H;
+                    else if (key.includes("2-Handed") || key.includes("2 Handed")) targetDict = critBy2H;
+                    else targetDict = critByReg;
+                } else {
+                    if (key.includes("1-Handed") || key.includes("1 Handed")) targetDict = nonCritBy1H;
+                    else if (key.includes("2-Handed") || key.includes("2 Handed")) targetDict = nonCritBy2H;
+                    else targetDict = nonCritByReg;
+                }
+
+                const types = Object.keys(targetDict);
+                if (types.length > 1) {
+                    typeBreakdownStr = ` <span class='beyond20-damage-breakdown'>(${types.map(t => `${targetDict[t]} ${t}`).join(" + ")})</span>`;
+                }
+            }
+
+            html += `<div class='${total_classes}'><b>${label}: </b>${roll_html}${typeBreakdownStr}</div>`;
         }
 
         if (request.damages && request.damages.length > 0 && 
