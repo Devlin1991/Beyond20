@@ -8,6 +8,46 @@ class DAMAGE_FLAGS {
     static get CONDITIONAL() { return 0x20; }
 }
 
+class ExplodingRule {
+    constructor({ name, limit, damageTypeFilter = null, triggerFn = (faces, val) => val === faces }) {
+        this.name = name;
+        this.limit = limit;
+        this.remaining = limit;
+        this.damageTypeFilter = damageTypeFilter;
+        this.triggerFn = triggerFn;
+    }
+
+    clone() {
+        return new ExplodingRule({
+            name: this.name,
+            limit: this.limit,
+            damageTypeFilter: this.damageTypeFilter,
+            triggerFn: this.triggerFn
+        });
+    }
+
+    canTrigger(dmgType, faces, val) {
+        if (this.remaining <= 0) return false;
+        if (this.damageTypeFilter) {
+            const matches = typeof this.damageTypeFilter === "function"
+                ? this.damageTypeFilter(dmgType)
+                : String(dmgType || "").toLowerCase().includes(String(this.damageTypeFilter).toLowerCase());
+            if (!matches) return false;
+        }
+        return this.triggerFn(faces, val);
+    }
+}
+
+function isPrimarySpellOrFeat(dmg_type) {
+    if (!dmg_type) return false;
+    return dmg_type.includes("Sorcerous Burst") ||
+           dmg_type.includes("Sneak Attack") ||
+           dmg_type.includes("Flame Tongue") ||
+           dmg_type.includes("ablaze") ||
+           dmg_type.includes("Giant's Havoc") ||
+           dmg_type.includes("Radiant Strikes");
+}
+
 class Beyond20RollRenderer {
     constructor(roller, prompter, displayer) {
         this._roller = roller;
@@ -737,7 +777,7 @@ class Beyond20RollRenderer {
                     const base_type = dmg_type.split("(")[0].trim();
                     const isVersatileHand = dmg_type.includes("(1-Hand)") || dmg_type.includes("(2-Hand)");
                     const isHpVariant = dmg_type.includes("(Full HP)") || dmg_type.includes("(Missing HP)");
-                    if (!isVersatileHand && !isHpVariant) {
+                    if (!isVersatileHand && !isHpVariant && !isPrimarySpellOrFeat(dmg_type)) {
                         if (seen_other_damages[base_type]) {
                             damage_flags = DAMAGE_FLAGS.CONDITIONAL;
                         }
@@ -858,7 +898,7 @@ class Beyond20RollRenderer {
                         const base_type = dmg_type.split("(")[0].trim();
                         const isVersatileHand = dmg_type.includes("(1-Hand)") || dmg_type.includes("(2-Hand)");
                         const isHpVariant = dmg_type.includes("(Full HP)") || dmg_type.includes("(Missing HP)");
-                        if (!isVersatileHand && !isHpVariant) {
+                        if (!isVersatileHand && !isHpVariant && !isPrimarySpellOrFeat(dmg_type)) {
                             if (seen_critical_other_damages[base_type]) {
                                 damage_flags = DAMAGE_FLAGS.CONDITIONAL;
                             }
@@ -880,67 +920,27 @@ class Beyond20RollRenderer {
                 await this._roller.resolveRolls(request.name, critical_damage_rolls, request);
             }
             
-            // Process Sorcerous Burst after critical hits so we can deploy bursts out of the critical
-            // damage dice as well.
-            if (request.name.includes("Sorcerous Burst")) {
-                const mods = request.character.spell_modifiers;
+            // Process exploding dice rules (Sorcerous Burst, etc.)
+            const activeRules = [];
+            const charObj = request.character || {};
+
+            if (request.name && request.name.includes("Sorcerous Burst")) {
+                const mods = charObj.spell_modifiers || {};
                 const sorcererMod = Object.keys(mods).find(x => x.toLowerCase() === "sorcerer");
-                const mainDamage = damage_rolls.find((roll) => roll[2] === DAMAGE_FLAGS.REGULAR);
-                const critDamage = damage_rolls.find((roll) => roll[2] === (DAMAGE_FLAGS.REGULAR | DAMAGE_FLAGS.CRITICAL));
-                const critRule = parseInt(this._settings["critical-homebrew"] || CriticalRules.PHB);
-                const doubleForCrit = is_critical && [CriticalRules.PHB, CriticalRules.HOMEBREW_REROLL, CriticalRules.HOMEBREW_MOD].includes(critRule);
-
-                const faces = parseInt(mainDamage[1].dice[0].faces);
-                let burstCount = mainDamage[1].dice[0].rolls.filter(x => x.roll === faces).length;
-                if (critRule !== CriticalRules.HOMEBREW_MAX && critDamage) {
-                    burstCount += critDamage[1].dice[0].rolls.filter(x => x.roll === faces).length;
+                let selectedModifier = sorcererMod || Object.keys(mods)[0];
+                if (!sorcererMod && Object.keys(mods).length > 1) {
+                    const result = await this.queryGeneric("Spellcasting Ability Modifier", "Burst Ability Modifier", Object.keys(mods));
+                    selectedModifier = result !== null ? Object.keys(mods)[result] : Object.keys(mods)[0];
                 }
-                
-                if (burstCount > 0) {
-                    // Determine the selected modifier, prompt only if multiple options and no sorcerer
-                    let selectedModifier = sorcererMod || Object.keys(mods)[0];
-                    if (!sorcererMod && Object.keys(mods).length > 1) {
-                        const result = await this.queryGeneric("Spellcasting Ability Modifier", "Burst Ability Modifier", Object.keys(mods));
-                        selectedModifier = result !== null ? Object.keys(mods)[result] : Object.keys(mods)[0];
-                    }
-                    let burstRollsLeft = parseInt(mods[selectedModifier]);
-          
-                    const rollBurstDamage = async (burst) => {
-                        if (burstRollsLeft <= 0) {
-                            return [];
-                        }
-                        burst = Math.min(burst, burstRollsLeft);
-                        burstRollsLeft -= burst;
-                        const amount = doubleForCrit ? burst * 2 : burst;
-                        const burstRoll = this._roller.roll(`${amount}d${faces}`);
-                        burstRoll.setRollType("damage");
-                        const rolls = [burstRoll];
-                        await this._roller.resolveRolls(request.name, rolls, request);
-                        const newBurstCount = burstRoll.dice[0].rolls.filter(x => x.roll === faces).length;
-                        if (newBurstCount > 0) {
-                            rolls.push(...await rollBurstDamage(newBurstCount));
-                        }
-                        return rolls;
-                    }
-                    const burstRolls = await rollBurstDamage(burstCount);
-                    let burstRollCount = 1;
-                    let burstCriticalAmount = 0;
-                    for (let burstRoll of burstRolls) {
-                        damage_rolls.push([`Burst (${burstRollCount++})`, burstRoll, DAMAGE_FLAGS.ADDITIONAL]);
-                        // Accumulate critical damage if needed
-                        if (is_critical && critRule === CriticalRules.HOMEBREW_MAX) {
-                            burstCriticalAmount += burstRoll.dice.reduce((sum, die) => sum + (die.amount * die.faces), 0);
-                        }
-                    }
+                const maxBurst = parseInt(mods[selectedModifier]) || 3;
+                activeRules.push(new ExplodingRule({
+                    name: "Sorcerous Burst",
+                    limit: maxBurst
+                }));
+            }
 
-                    // Handle critical burst damage roll if needed
-                    if(is_critical && critRule === CriticalRules.HOMEBREW_MAX && burstCriticalAmount > 0) {
-                        const criticalRoll = this._roller.roll(burstCriticalAmount.toString());
-                        criticalRoll.setRollType("critical-damage");
-                        damage_rolls.push([`Burst Critical`, criticalRoll, DAMAGE_FLAGS.ADDITIONAL | DAMAGE_FLAGS.CRITICAL]);
-                        await this._roller.resolveRolls(request.name, [criticalRoll], request);
-                    }
-                }
+            if (activeRules.length > 0) {
+                await this.processAllExplodingDice(request, damage_rolls, is_critical, activeRules);
             }
         } else {
             // If no damages, still need to resolve to hit rolls
@@ -1140,6 +1140,178 @@ class Beyond20RollRenderer {
             const rname = request.name || request.type;
 
             return this.rollDice(request, rname + " (" + mod + ")", mod, {});
+        }
+    }
+
+    async processAllExplodingDice(request, damage_rolls, is_critical, activeRules) {
+        if (!activeRules || activeRules.length === 0 || damage_rolls.length === 0) return;
+
+        const critRule = parseInt(this._settings["critical-homebrew"] || CriticalRules.PHB);
+        const hasVersatile = damage_rolls.some(([_, __, flags]) => (flags & DAMAGE_FLAGS.VERSATILE) !== 0);
+
+        const runPass = async (startingDice, rules, handType) => {
+            const queue = [...startingDice];
+            const ruleBursts = {};
+
+            while (queue.length > 0) {
+                const die = queue.shift();
+
+                for (const rule of rules) {
+                    if (rule.canTrigger(die.dmgType, die.faces, die.val)) {
+                        rule.remaining--;
+
+                        const amount = 1;
+                        const burstRoll = this._roller.roll(`${amount}d${die.faces}`);
+                        burstRoll.setRollType("damage");
+                        await this._roller.resolveRolls(request.name, [burstRoll], request);
+
+                        let burstFlags = DAMAGE_FLAGS.ADDITIONAL;
+                        if (handType === "1-Hand") {
+                            burstFlags |= DAMAGE_FLAGS.REGULAR;
+                        } else if (handType === "2-Hand") {
+                            burstFlags |= DAMAGE_FLAGS.VERSATILE;
+                        } else {
+                            if (die.originFlags & DAMAGE_FLAGS.REGULAR) burstFlags |= DAMAGE_FLAGS.REGULAR;
+                            if (die.originFlags & DAMAGE_FLAGS.VERSATILE) burstFlags |= DAMAGE_FLAGS.VERSATILE;
+                        }
+                        if (die.originFlags & DAMAGE_FLAGS.CRITICAL) burstFlags |= DAMAGE_FLAGS.CRITICAL;
+
+                        let baseDmgType = die.dmgType.split("(")[0].trim().replace(/(\s*Damage)+$/i, "") || "Damage";
+                        const handTag = handType ? ` (${handType})` : (die.dmgType.includes("(1-Hand)") ? " (1-Hand)" : (die.dmgType.includes("(2-Hand)") ? " (2-Hand)" : ""));
+
+                        const ruleKey = `${rule.name}__${baseDmgType}__${handTag}`;
+                        if (!ruleBursts[ruleKey]) {
+                            ruleBursts[ruleKey] = {
+                                ruleName: rule.name,
+                                baseDmgType,
+                                handTag,
+                                burstFlags,
+                                rolls: []
+                            };
+                        }
+                        ruleBursts[ruleKey].rolls.push(burstRoll);
+
+                        const burstDmgType = (die.dmgType && die.dmgType.trim() !== "") ? die.dmgType : baseDmgType;
+
+                        for (const newDie of burstRoll.dice) {
+                            for (const newRoll of (newDie.rolls || [])) {
+                                if (!newRoll.discarded) {
+                                    queue.push({
+                                        faces: parseInt(newDie.faces),
+                                        val: parseInt(newRoll.roll),
+                                        dmgType: burstDmgType,
+                                        originFlags: die.originFlags
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            for (const ruleKey in ruleBursts) {
+                const entry = ruleBursts[ruleKey];
+                const count = entry.rolls.length;
+                if (count === 0) continue;
+
+                const allDice = [];
+                for (const r of entry.rolls) {
+                    for (const d of (r.dice || [])) {
+                        allDice.push(d);
+                    }
+                }
+
+                if (allDice.length === 0) continue;
+
+                let combinedRoll;
+                const sameFaces = allDice.every(d => d.faces === allDice[0].faces);
+
+                if (sameFaces) {
+                    const faces = allDice[0].faces;
+                    combinedRoll = this._roller.roll(`${allDice.length}d${faces}`);
+                    combinedRoll.setRollType("damage");
+                    const mergedRolls = [];
+                    for (const d of allDice) {
+                        for (const r of (d.rolls || [])) {
+                            mergedRolls.push(r);
+                        }
+                    }
+                    if (combinedRoll.dice && combinedRoll.dice.length > 0) {
+                        combinedRoll.dice[0]._rolls = mergedRolls;
+                        combinedRoll.dice[0].calculateTotal();
+                        combinedRoll.calculateTotal();
+                    }
+                } else {
+                    const formula = allDice.map(d => `1d${d.faces}`).join(" + ");
+                    combinedRoll = this._roller.roll(formula);
+                    combinedRoll.setRollType("damage");
+                    for (let i = 0; i < allDice.length; i++) {
+                        if (combinedRoll.dice && combinedRoll.dice[i]) {
+                            combinedRoll.dice[i]._rolls = [...(allDice[i].rolls || [])];
+                            combinedRoll.dice[i].calculateTotal();
+                        }
+                    }
+                    combinedRoll.calculateTotal();
+                }
+
+                const countTag = count > 1 ? ` x${count}` : "";
+                const label = `${entry.baseDmgType}${entry.handTag} (${entry.ruleName}${countTag}) Damage`;
+                damage_rolls.push([label, combinedRoll, entry.burstFlags]);
+            }
+        };
+
+        if (hasVersatile) {
+            const dice1H = [];
+            const dice2H = [];
+
+            for (const [dmgType, rollObj, flags] of damage_rolls) {
+                if (!rollObj || !rollObj.dice) continue;
+                if ((flags & DAMAGE_FLAGS.CRITICAL) !== 0 && critRule === CriticalRules.HOMEBREW_MAX) continue;
+
+                const is2HOnly = (flags & DAMAGE_FLAGS.VERSATILE) !== 0 && (flags & DAMAGE_FLAGS.REGULAR) === 0;
+                const is1HOnly = (flags & DAMAGE_FLAGS.REGULAR) !== 0 && (flags & DAMAGE_FLAGS.VERSATILE) === 0;
+
+                for (const d of rollObj.dice) {
+                    for (const r of (d.rolls || [])) {
+                        if (!r.discarded) {
+                            const dieObj = {
+                                faces: parseInt(d.faces),
+                                val: parseInt(r.roll),
+                                dmgType: String(dmgType || ""),
+                                originFlags: flags
+                            };
+                            if (!is2HOnly) dice1H.push(dieObj);
+                            if (!is1HOnly) dice2H.push(dieObj);
+                        }
+                    }
+                }
+            }
+
+            const rules1H = activeRules.map(r => r.clone());
+            const rules2H = activeRules.map(r => r.clone());
+
+            await runPass(dice1H, rules1H, "1-Hand");
+            await runPass(dice2H, rules2H, "2-Hand");
+        } else {
+            const allDice = [];
+            for (const [dmgType, rollObj, flags] of damage_rolls) {
+                if (!rollObj || !rollObj.dice) continue;
+                if ((flags & DAMAGE_FLAGS.CRITICAL) !== 0 && critRule === CriticalRules.HOMEBREW_MAX) continue;
+
+                for (const d of rollObj.dice) {
+                    for (const r of (d.rolls || [])) {
+                        if (!r.discarded) {
+                            allDice.push({
+                                faces: parseInt(d.faces),
+                                val: parseInt(r.roll),
+                                dmgType: String(dmgType || ""),
+                                originFlags: flags
+                            });
+                        }
+                    }
+                }
+            }
+            await runPass(allDice, activeRules, "");
         }
     }
 }
