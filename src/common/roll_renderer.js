@@ -38,9 +38,12 @@ class ExplodingRule {
     }
 }
 
+const BLADE_CANTRIPS_LIST = ["Burning Blade", "Arc Blade", "True Strike", "Frigid Blade", "Green-Flame Blade", "Booming Blade"];
+
 function isPrimarySpellOrFeat(dmg_type) {
     if (!dmg_type) return false;
-    return dmg_type.includes("Sorcerous Burst") ||
+    return BLADE_CANTRIPS_LIST.some(k => dmg_type.includes(k)) ||
+           dmg_type.includes("Sorcerous Burst") ||
            dmg_type.includes("Sneak Attack") ||
            dmg_type.includes("Flame Tongue") ||
            dmg_type.includes("ablaze") ||
@@ -920,11 +923,11 @@ class Beyond20RollRenderer {
                 await this._roller.resolveRolls(request.name, critical_damage_rolls, request);
             }
             
-            // Process exploding dice rules (Sorcerous Burst, etc.)
+            // Process exploding dice rules (Sorcerous Burst, Burning Blade, etc.)
             const activeRules = [];
             const charObj = request.character || {};
 
-            if (request.name && request.name.includes("Sorcerous Burst")) {
+            if (request.name && (request.name.includes("Sorcerous Burst") || request.name.includes("Burning Blade"))) {
                 const mods = charObj.spell_modifiers || {};
                 const sorcererMod = Object.keys(mods).find(x => x.toLowerCase() === "sorcerer");
                 let selectedModifier = sorcererMod || Object.keys(mods)[0];
@@ -933,8 +936,9 @@ class Beyond20RollRenderer {
                     selectedModifier = result !== null ? Object.keys(mods)[result] : Object.keys(mods)[0];
                 }
                 const maxBurst = parseInt(mods[selectedModifier]) || 3;
+                const ruleName = request.name.includes("Burning Blade") ? "Burning Blade Explode" : "Sorcerous Burst";
                 activeRules.push(new ExplodingRule({
-                    name: "Sorcerous Burst",
+                    name: ruleName,
                     limit: maxBurst
                 }));
             }
@@ -1177,6 +1181,9 @@ class Beyond20RollRenderer {
                         if (die.originFlags & DAMAGE_FLAGS.CRITICAL) burstFlags |= DAMAGE_FLAGS.CRITICAL;
 
                         let baseDmgType = die.dmgType.split("(")[0].trim().replace(/(\s*Damage)+$/i, "") || "Damage";
+                        if (rule.name === "Burning Blade Explode") {
+                            baseDmgType = "Fire";
+                        }
                         const handTag = handType ? ` (${handType})` : (die.dmgType.includes("(1-Hand)") ? " (1-Hand)" : (die.dmgType.includes("(2-Hand)") ? " (2-Hand)" : ""));
 
                         const ruleKey = `${rule.name}__${baseDmgType}__${handTag}`;

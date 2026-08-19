@@ -887,7 +887,149 @@ function handleSpecialGeneralAttacks(damages=[], damage_types=[], properties, se
     return to_hit;
 }
 
-function handleSpecialWeaponAttacks(damages=[], damage_types=[], properties, settings_to_change={}, {action_name="", item_customizations=[], item_type="", item_name="", to_hit, effects=[]}={}) {
+const BLADE_CANTRIPS_CONFIG = {
+    "Burning Blade": {
+        convertedType: "Fire",
+        allowRanged: false
+    },
+    "Arc Blade": {
+        convertedType: "Lightning",
+        allowRanged: true,
+        rangeFt: "15 ft"
+    },
+    "True Strike": {
+        convertedType: "Radiant",
+        allowRanged: false
+    },
+    "Frigid Blade": {
+        convertedType: "Cold",
+        allowRanged: false,
+        stepUpDie: true
+    },
+    "Green-Flame Blade": {
+        convertedType: "Fire",
+        allowRanged: false
+    },
+    "Booming Blade": {
+        convertedType: "Thunder",
+        allowRanged: false
+    }
+};
+
+async function handleBladeCantripConversion(action_name, item_name, damages, damage_types, properties) {
+    const fullName = action_name || item_name || "";
+    const cantripKey = Object.keys(BLADE_CANTRIPS_CONFIG).find(key => 
+        fullName.toLowerCase().includes(key.toLowerCase())
+    );
+    if (!cantripKey) return false;
+
+    const config = BLADE_CANTRIPS_CONFIG[cantripKey];
+
+    if (config.stepUpDie && damages && damages.length > 0) {
+        for (let i = 0; i < damages.length; i++) {
+            const dt = damage_types[i] || "";
+            if (i === 0 || dt.includes("1-Hand") || dt.includes("2-Hand")) {
+                let dmgStr = damages[i];
+                const match = dmgStr.match(/^(\d*)d(\d+)(.*)$/);
+                if (match) {
+                    const count = parseInt(match[1] || "1");
+                    const sides = parseInt(match[2]);
+                    const rest = match[3] || "";
+
+                    if (count === 1) {
+                        if (sides === 4) {
+                            damages[i] = `1d6${rest}`;
+                        } else if (sides === 6) {
+                            damages[i] = `1d8${rest}`;
+                        } else if (sides === 8) {
+                            damages[i] = `1d10${rest}`;
+                        } else if (sides === 10) {
+                            const step10Choice = await dndbeyondDiceRoller.queryGeneric(
+                                "Frigid Blade Die Increase",
+                                `Choose Increased Die for 1d10 Base Damage:`,
+                                {
+                                    "d12": "1d12",
+                                    "2d6": "2d6"
+                                },
+                                "frigid_d10_step",
+                                ["d12", "2d6"]
+                            );
+                            if (step10Choice !== null) {
+                                const newDie = (step10Choice === "2d6") ? "2d6" : "1d12";
+                                damages[i] = `${newDie}${rest}`;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let convertToType = false;
+
+    if (config.allowRanged) {
+        const attack_mode = await dndbeyondDiceRoller.queryGeneric(
+            `${cantripKey} Attack Type`,
+            `Choose ${cantripKey} Attack Mode:`,
+            {
+                "melee": "Melee Attack",
+                "ranged": `Ranged Attack (${config.rangeFt || "15 ft"} - Convert to ${config.convertedType})`
+            },
+            `${cantripKey.toLowerCase().replace(/[^a-z0-9]/g, "_")}_mode`,
+            ["melee", "ranged"]
+        );
+        if (attack_mode === null) return true;
+
+        if (attack_mode === "ranged") {
+            convertToType = true;
+            properties["Range"] = config.rangeFt || "15 ft";
+            properties["Attack Type"] = "Ranged";
+        } else if (attack_mode === "melee") {
+            const dmg_choice = await dndbeyondDiceRoller.queryGeneric(
+                `${cantripKey} Damage Type`,
+                `Choose Damage Type for Melee Attack:`,
+                {
+                    "normal": "Normal Weapon Damage",
+                    "converted": `Convert Weapon Damage to ${config.convertedType}`
+                },
+                `${cantripKey.toLowerCase().replace(/[^a-z0-9]/g, "_")}_dmg`,
+                ["normal", "converted"]
+            );
+            if (dmg_choice === null) return true;
+            if (dmg_choice && dmg_choice !== "normal" && dmg_choice !== "melee") {
+                convertToType = true;
+            }
+        }
+    } else {
+        const dmg_choice = await dndbeyondDiceRoller.queryGeneric(
+            `${cantripKey} Damage Type`,
+            `Choose Damage Type for Attack:`,
+            {
+                "normal": "Normal Weapon Damage",
+                "converted": `Convert Weapon Damage to ${config.convertedType}`
+            },
+            `${cantripKey.toLowerCase().replace(/[^a-z0-9]/g, "_")}_dmg`,
+            ["normal", "converted"]
+        );
+        if (dmg_choice === null) return true;
+        if (dmg_choice && dmg_choice !== "normal" && dmg_choice !== "melee") {
+            convertToType = true;
+        }
+    }
+
+    if (convertToType) {
+        const targetTypeLower = config.convertedType.toLowerCase();
+        for (let i = 0; i < damage_types.length; i++) {
+            if (damage_types[i] && !damage_types[i].toLowerCase().includes(targetTypeLower)) {
+                damage_types[i] = `${config.convertedType} (${cantripKey}${damage_types[i] ? " - " + damage_types[i] : ""})`;
+            }
+        }
+    }
+
+    return true;
+}
+
+async function handleSpecialWeaponAttacks(damages=[], damage_types=[], properties, settings_to_change={}, {action_name="", item_customizations=[], item_type="", item_name="", to_hit, effects=[]}={}) {
     // Class Specific
     if (character.hasClass("Artificer")) {
         //Artificer: Battlemaster: Arcane Jolt
@@ -1067,6 +1209,8 @@ function handleSpecialWeaponAttacks(damages=[], damage_types=[], properties, set
         }
     }
 
+    await handleBladeCantripConversion(action_name, item_name, damages, damage_types, properties);
+
     return to_hit;
 }
 
@@ -1231,16 +1375,34 @@ async function rollItem(force_display = false, force_to_hit_only = false, force_
 
         const weapon_damage_length = damages.length;
         
+        let group_name = "";
         // If clicking on a spell group within a item (Green flame blade, Booming blade), then add the additional damages from that spell
         if (spell_group) {
-            const group_name = $(spell_group).find(".ct-item-detail__spell-damage-group-name").text();
+            group_name = $(spell_group).find(".ct-item-detail__spell-damage-group-name").text();
             const group_origin = $(spell_group).find(".ddbc-data-origin-name").text();
             const group_damages = $(spell_group).find(".ct-item-detail__spell-damage-group-item");
             const spell_damages = [];
             const spell_damage_types = [];
             for (let j = 0; j < group_damages.length; j++) {
-                let dmg = group_damages.eq(j).find(".ddbc-damage__value").text();
-                let dmg_type = group_damages.eq(j).find(".ddbc-tooltip").attr("data-original-title");
+                let dmg = group_damages.eq(j).find(".ddbc-damage__value,.ct-damage__value").text();
+                let dmg_el = group_damages.eq(j).find(".ddbc-tooltip,.ct-tooltip,[class*='tooltip'],[class*='damage-type'],[class*='damageType']");
+                let dmg_type = dmg_el.attr("data-original-title") || dmg_el.attr("title") || dmg_el.attr("aria-label") || dmg_el.text().trim();
+                if (dmg_type) dmg_type = dmg_type.replace(/\s*Damage\s*$/i, "").trim();
+                const matchedCantrip = Object.keys(BLADE_CANTRIPS_CONFIG).find(key => 
+                    group_name.toLowerCase().includes(key.toLowerCase())
+                );
+                if (!dmg_type || dmg_type === "undefined") {
+                    if (matchedCantrip) {
+                        dmg_type = BLADE_CANTRIPS_CONFIG[matchedCantrip].convertedType;
+                    } else {
+                        dmg_type = "";
+                    }
+                }
+
+                if (matchedCantrip) {
+                    dmg = dmg.replace(/\s*[+-]\s*\d+\s*$/, "");
+                }
+
                 if (dmg != "") {
                     spell_damages.push(dmg);
                     spell_damage_types.push(dmg_type);
@@ -1248,7 +1410,7 @@ async function rollItem(force_display = false, force_to_hit_only = false, force_
             }
             handleSpecialSpells(group_name, spell_damages, spell_damage_types, {spell_source: group_origin});
             damages.push(...spell_damages);
-            damage_types.push(...spell_damage_types.map(t => `${t} (${group_name})`));
+            damage_types.push(...spell_damage_types.map(t => `${t ? t + " " : ""}(${group_name})`));
         }
 
         addCustomDamages(character, damages, damage_types);
@@ -1258,16 +1420,18 @@ async function rollItem(force_display = false, force_to_hit_only = false, force_
 
         const effects = [];
 
-        to_hit = handleSpecialGeneralAttacks(damages, damage_types, properties, settings_to_change, {to_hit, item_name, effects});
+        const action_name = spell_group ? group_name : "";
 
-        to_hit = handleSpecialWeaponAttacks(damages, damage_types, properties, settings_to_change, {item_customizations, item_type, to_hit, item_name, effects});
+        to_hit = handleSpecialGeneralAttacks(damages, damage_types, properties, settings_to_change, {to_hit, item_name, action_name, effects});
+
+        to_hit = await handleSpecialWeaponAttacks(damages, damage_types, properties, settings_to_change, {action_name, item_customizations, item_type, to_hit, item_name, effects, weapon_damage_length});
 
         if (properties["Attack Type"] == "Melee") {
-            to_hit = handleSpecialMeleeAttacks(damages, damage_types, properties, settings_to_change, { to_hit, effects });
+            to_hit = handleSpecialMeleeAttacks(damages, damage_types, properties, settings_to_change, { to_hit, action_name, effects });
         }
 
         if (properties["Attack Type"] == "Ranged") {
-            to_hit = handleSpecialRangedAttacks(damages, damage_types, properties, settings_to_change, { to_hit, effects });
+            to_hit = handleSpecialRangedAttacks(damages, damage_types, properties, settings_to_change, { to_hit, action_name, effects });
         }
         
         let critical_limit = 20;
@@ -1294,9 +1458,11 @@ async function rollItem(force_display = false, force_to_hit_only = false, force_
             }
         }
 
+        const attack_display_name = spell_group ? `${item_name} (${group_name})` : item_name;
+
         const roll_properties = await buildAttackRoll(character,
             "item",
-            item_name,
+            attack_display_name,
             description,
             properties,
             damages,
@@ -1543,7 +1709,7 @@ async function rollAction(paneClass, force_to_hit_only = false, force_damages_on
         to_hit = handleSpecialGeneralAttacks(damages, damage_types, properties, settings_to_change, {to_hit, action_name});
 
         if (isMeleeAttack || isRangedAttack) {
-            to_hit = handleSpecialWeaponAttacks(damages, damage_types, properties, settings_to_change, {to_hit, action_name});
+            to_hit = await handleSpecialWeaponAttacks(damages, damage_types, properties, settings_to_change, {to_hit, action_name});
             if (character.hasClassFeature("Improved Critical"))
                 critical_limit = 19;
             if (character.hasClassFeature("Invincible Conqueror") &&
@@ -1652,6 +1818,19 @@ function handleSpecialSpells(spell_name, damages=[], damage_types=[], {spell_sou
         damage_types.length = 0;
         damages.push(dmg);
         damage_types.push("Triggering Type");
+    }
+
+    // Handle Blade Cantrips damage types
+    const cantripKey = Object.keys(BLADE_CANTRIPS_CONFIG).find(key => 
+        spell_name && spell_name.toLowerCase().includes(key.toLowerCase())
+    );
+    if (cantripKey) {
+        const config = BLADE_CANTRIPS_CONFIG[cantripKey];
+        for (let i = 0; i < damage_types.length; i++) {
+            if (!damage_types[i] || damage_types[i] === "Custom" || damage_types[i] === "") {
+                damage_types[i] = `${config.convertedType} (${cantripKey})`;
+            }
+        }
     }
 
     // Handle Hunter's Mark
@@ -1912,7 +2091,14 @@ async function rollSpell(force_display = false, force_to_hit_only = false, force
         
         for (let modifier of damage_modifiers.toArray()) {
             const dmg = $(modifier).find(".ct-spell-caster__modifier-amount,.ddbc-spell-caster__modifier-amount").text();
-            const dmgtype = $(modifier).find(".ct-damage-type-icon .ct-tooltip,.ddbc-damage-type-icon .ddbc-tooltip").attr("data-original-title") || "";
+            let dmg_el = $(modifier).find(".ct-damage-type-icon .ct-tooltip,.ddbc-damage-type-icon .ddbc-tooltip,[class*='tooltip'],[class*='damage-type'],[class*='damageType']");
+            let dmgtype = dmg_el.attr("data-original-title") || dmg_el.attr("title") || dmg_el.attr("aria-label") || dmg_el.text().trim() || "";
+            if (dmgtype) dmgtype = dmgtype.replace(/\s*Damage\s*$/i, "").trim();
+            if (!dmgtype || dmgtype === "undefined") {
+                if (spell_name.includes("Burning Blade")) {
+                    dmgtype = "Fire";
+                }
+            }
             damages.push(dmg);
             damage_types.push(dmgtype);
         }
