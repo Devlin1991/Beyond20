@@ -36,14 +36,17 @@ Google's Antigravity CLI tool was used to implement fixes and features specified
 - **Renderer Integration** (`src/common/roll_renderer.js`):
   - Detects if the character has the "Pyromaniac" feat.
   - Registers an `ExplodingRule` for "Pyromaniac Flare" limited by the character's Proficiency Bonus.
+  - Normalizes Pyromaniac Flare damage to `Fire` damage.
+  - Consolidates multiple flare bursts into a single line (e.g. `Fire (Pyromaniac Flare x2) Damage: 13`) with full hover tooltip breakdown.
   - Added "Pyromaniac" to `isPrimarySpellOrFeat` so flare damage is not treated as conditional.
 - **Documentation** (`docs/features.md`): Added `Feat: Pyromaniac`.
 
 ## How to test
 1. Add the **Pyromaniac** feat to a character sheet on D&D Beyond.
 2. Roll a fire spell (e.g. *Fire Bolt*, *Fireball*) or a *Flame Tongue* weapon strike.
-3. When any die rolls its maximum face, verify a `Pyromaniac Flare` damage die is automatically rolled and included in the output.
+3. When any die rolls its maximum face, verify a `Fire (Pyromaniac Flare)` damage die is automatically rolled and included in the output (grouped with `x{count}` if multiple flares trigger).
 4. Verify the total number of flares per attack does not exceed the character's Proficiency Bonus.
+5. Verify hover tooltip on the flare total shows the individual die rolls.
 
 ## Reviewer notes
 <!-- Anything you want reviewers to pay attention to: tricky logic, follow-ups, tradeoffs -->

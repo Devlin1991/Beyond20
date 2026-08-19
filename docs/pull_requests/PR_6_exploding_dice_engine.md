@@ -38,16 +38,20 @@ Google's Antigravity CLI tool was used to implement fixes and features specified
 - **Regex & Utils** (`src/common/utils.js`): Updated `DICE_REGEXP` to match exploding syntax.
 - **Roll20 Macros** (`src/roll20/content-script.js`): Strips `!mX` down to `!` for Roll20 macro compatibility.
 - **Renderer Architecture** (`src/common/roll_renderer.js`):
-  - Introduced the `ExplodingRule` helper class.
-  - Implemented `processAllExplodingDice(request, damage_rolls, is_critical, activeRules)` queue-based processing.
+  - Introduced the `ExplodingRule` helper class with `clone()` support for independent resolution passes.
+  - Implemented `processAllExplodingDice(request, damage_rolls, is_critical, activeRules)` with queue-based cascade processing.
+  - Consolidated multi-burst explosions from the same mechanic into a single line (e.g., `Fire (Burning Blade Explode x3) Damage: 12`) while preserving full die-by-die hover tooltip breakdowns.
+  - Implemented independent 1-Hand vs 2-Hand pool and explode limit tracking for versatile weapons in "Roll both damages separately" mode.
+  - Added *Sorcerous Burst* to `isPrimarySpellOrFeat` so burst damage is never marked conditional.
   - Refactored *Sorcerous Burst* to use the new `ExplodingRule` system.
 
 ## How to test
 1. Test custom exploding dice formulas from description or console: `1d6!`, `2d8!>=7`, `1d10!m2`.
 2. Verify exploded dice roll additional dice and display in tooltips with the dotted underline highlight.
-3. Cast **Sorcerous Burst** (2024 PHB) on D&D Beyond: verify that max die rolls cascade into burst damage properly up to spellcasting modifier limit.
-4. Verify roll output sent to Roll20 / Foundry VTT works without syntax errors.
+3. Cast **Sorcerous Burst** (2024 PHB) on D&D Beyond: verify that max die rolls cascade into burst damage properly up to spellcasting modifier limit, grouped cleanly into a single line with hover breakdown.
+4. Test a versatile weapon attack with exploding dice: verify 1H and 2H pools track limits and totals independently.
+5. Verify roll output sent to Roll20 / Foundry VTT / Discord works without syntax errors.
 
 ## Reviewer notes
 <!-- Anything you want reviewers to pay attention to: tricky logic, follow-ups, tradeoffs -->
-- 
+-

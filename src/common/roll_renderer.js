@@ -11,9 +11,19 @@ class DAMAGE_FLAGS {
 class ExplodingRule {
     constructor({ name, limit, damageTypeFilter = null, triggerFn = (faces, val) => val === faces }) {
         this.name = name;
+        this.limit = limit;
         this.remaining = limit;
         this.damageTypeFilter = damageTypeFilter;
         this.triggerFn = triggerFn;
+    }
+
+    clone() {
+        return new ExplodingRule({
+            name: this.name,
+            limit: this.limit,
+            damageTypeFilter: this.damageTypeFilter,
+            triggerFn: this.triggerFn
+        });
     }
 
     canTrigger(dmgType, faces, val) {
@@ -34,6 +44,7 @@ function isPrimarySpellOrFeat(dmg_type) {
     if (!dmg_type) return false;
     return BLADE_CANTRIPS_LIST.some(k => dmg_type.includes(k)) ||
            dmg_type.includes("Pyromaniac") ||
+           dmg_type.includes("Sorcerous Burst") ||
            dmg_type.includes("Sneak Attack") ||
            dmg_type.includes("Flame Tongue") ||
            dmg_type.includes("ablaze") ||
@@ -1217,68 +1228,174 @@ class Beyond20RollRenderer {
         if (!activeRules || activeRules.length === 0 || damage_rolls.length === 0) return;
 
         const critRule = parseInt(this._settings["critical-homebrew"] || CriticalRules.PHB);
-        const doubleForCrit = is_critical && [CriticalRules.PHB, CriticalRules.HOMEBREW_REROLL, CriticalRules.HOMEBREW_MOD].includes(critRule);
+        const hasVersatile = damage_rolls.some(([_, __, flags]) => (flags & DAMAGE_FLAGS.VERSATILE) !== 0);
 
-        const queue = [];
-        for (const [dmgType, rollObj, flags] of damage_rolls) {
-            if (!rollObj || !rollObj.dice) continue;
-            if ((flags & DAMAGE_FLAGS.CRITICAL) !== 0 && critRule === CriticalRules.HOMEBREW_MAX) continue;
+        const runPass = async (startingDice, rules, handType) => {
+            const queue = [...startingDice];
+            const ruleBursts = {};
 
-            for (const d of rollObj.dice) {
-                for (const r of (d.rolls || [])) {
-                    if (!r.discarded) {
-                        queue.push({
-                            faces: parseInt(d.faces),
-                            val: parseInt(r.roll),
-                            dmgType: String(dmgType || ""),
-                            originFlags: flags
-                        });
-                    }
-                }
-            }
-        }
+            while (queue.length > 0) {
+                const die = queue.shift();
 
-        const burstCounters = {};
+                for (const rule of rules) {
+                    if (rule.canTrigger(die.dmgType, die.faces, die.val)) {
+                        rule.remaining--;
 
-        while (queue.length > 0) {
-            const die = queue.shift();
+                        const amount = 1;
+                        const burstRoll = this._roller.roll(`${amount}d${die.faces}`);
+                        burstRoll.setRollType("damage");
+                        await this._roller.resolveRolls(request.name, [burstRoll], request);
 
-            for (const rule of activeRules) {
-                if (rule.canTrigger(die.dmgType, die.faces, die.val)) {
-                    rule.remaining--;
-                    burstCounters[rule.name] = (burstCounters[rule.name] || 0) + 1;
+                        let burstFlags = DAMAGE_FLAGS.ADDITIONAL;
+                        if (handType === "1-Hand") {
+                            burstFlags |= DAMAGE_FLAGS.REGULAR;
+                        } else if (handType === "2-Hand") {
+                            burstFlags |= DAMAGE_FLAGS.VERSATILE;
+                        } else {
+                            if (die.originFlags & DAMAGE_FLAGS.REGULAR) burstFlags |= DAMAGE_FLAGS.REGULAR;
+                            if (die.originFlags & DAMAGE_FLAGS.VERSATILE) burstFlags |= DAMAGE_FLAGS.VERSATILE;
+                        }
+                        if (die.originFlags & DAMAGE_FLAGS.CRITICAL) burstFlags |= DAMAGE_FLAGS.CRITICAL;
 
-                    const amount = 1;
-                    const burstRoll = this._roller.roll(`${amount}d${die.faces}`);
-                    burstRoll.setRollType("damage");
-                    await this._roller.resolveRolls(request.name, [burstRoll], request);
+                        let baseDmgType = die.dmgType.split("(")[0].trim().replace(/(\s*Damage)+$/i, "") || "Fire";
+                        if (rule.name === "Pyromaniac Flare" || rule.name === "Burning Blade Explode") {
+                            baseDmgType = "Fire";
+                        }
+                        const handTag = handType ? ` (${handType})` : (die.dmgType.includes("(1-Hand)") ? " (1-Hand)" : (die.dmgType.includes("(2-Hand)") ? " (2-Hand)" : ""));
 
-                    let burstFlags = DAMAGE_FLAGS.ADDITIONAL;
-                    if (die.originFlags & DAMAGE_FLAGS.REGULAR) burstFlags |= DAMAGE_FLAGS.REGULAR;
-                    if (die.originFlags & DAMAGE_FLAGS.VERSATILE) burstFlags |= DAMAGE_FLAGS.VERSATILE;
-                    if (die.originFlags & DAMAGE_FLAGS.CRITICAL) burstFlags |= DAMAGE_FLAGS.CRITICAL;
+                        const ruleKey = `${rule.name}__${baseDmgType}__${handTag}`;
+                        if (!ruleBursts[ruleKey]) {
+                            ruleBursts[ruleKey] = {
+                                ruleName: rule.name,
+                                baseDmgType,
+                                handTag,
+                                burstFlags,
+                                rolls: []
+                            };
+                        }
+                        ruleBursts[ruleKey].rolls.push(burstRoll);
 
-                    const baseDmgType = die.dmgType.split("(")[0].trim().replace(/(\s*Damage)+$/i, "") || "Fire";
-                    const handTag = die.dmgType.includes("(1-Hand)") ? " (1-Hand)" : (die.dmgType.includes("(2-Hand)") ? " (2-Hand)" : "");
-                    const label = `${baseDmgType}${handTag} (${rule.name} #${burstCounters[rule.name]}) Damage`;
-                    damage_rolls.push([label, burstRoll, burstFlags]);
+                        const burstDmgType = (die.dmgType && die.dmgType.trim() !== "") ? die.dmgType : baseDmgType;
 
-                    const burstDmgType = (die.dmgType && die.dmgType.trim() !== "") ? die.dmgType : baseDmgType;
-
-                    for (const newDie of burstRoll.dice) {
-                        for (const newRoll of (newDie.rolls || [])) {
-                            if (!newRoll.discarded) {
-                                queue.push({
-                                    faces: parseInt(newDie.faces),
-                                    val: parseInt(newRoll.roll),
-                                    dmgType: burstDmgType,
-                                    originFlags: die.originFlags
-                                });
+                        for (const newDie of burstRoll.dice) {
+                            for (const newRoll of (newDie.rolls || [])) {
+                                if (!newRoll.discarded) {
+                                    queue.push({
+                                        faces: parseInt(newDie.faces),
+                                        val: parseInt(newRoll.roll),
+                                        dmgType: burstDmgType,
+                                        originFlags: die.originFlags
+                                    });
+                                }
                             }
                         }
                     }
                 }
             }
+
+            for (const ruleKey in ruleBursts) {
+                const entry = ruleBursts[ruleKey];
+                const count = entry.rolls.length;
+                if (count === 0) continue;
+
+                const allDice = [];
+                for (const r of entry.rolls) {
+                    for (const d of (r.dice || [])) {
+                        allDice.push(d);
+                    }
+                }
+
+                if (allDice.length === 0) continue;
+
+                let combinedRoll;
+                const sameFaces = allDice.every(d => d.faces === allDice[0].faces);
+
+                if (sameFaces) {
+                    const faces = allDice[0].faces;
+                    combinedRoll = this._roller.roll(`${allDice.length}d${faces}`);
+                    combinedRoll.setRollType("damage");
+                    const mergedRolls = [];
+                    for (const d of allDice) {
+                        for (const r of (d.rolls || [])) {
+                            mergedRolls.push(r);
+                        }
+                    }
+                    if (combinedRoll.dice && combinedRoll.dice.length > 0) {
+                        combinedRoll.dice[0]._rolls = mergedRolls;
+                        combinedRoll.dice[0].calculateTotal();
+                        combinedRoll.calculateTotal();
+                    }
+                } else {
+                    const formula = allDice.map(d => `1d${d.faces}`).join(" + ");
+                    combinedRoll = this._roller.roll(formula);
+                    combinedRoll.setRollType("damage");
+                    for (let i = 0; i < allDice.length; i++) {
+                        if (combinedRoll.dice && combinedRoll.dice[i]) {
+                            combinedRoll.dice[i]._rolls = [...(allDice[i].rolls || [])];
+                            combinedRoll.dice[i].calculateTotal();
+                        }
+                    }
+                    combinedRoll.calculateTotal();
+                }
+
+                const countTag = count > 1 ? ` x${count}` : "";
+                const label = `${entry.baseDmgType}${entry.handTag} (${entry.ruleName}${countTag}) Damage`;
+                damage_rolls.push([label, combinedRoll, entry.burstFlags]);
+            }
+        };
+
+        if (hasVersatile) {
+            const dice1H = [];
+            const dice2H = [];
+
+            for (const [dmgType, rollObj, flags] of damage_rolls) {
+                if (!rollObj || !rollObj.dice) continue;
+                if ((flags & DAMAGE_FLAGS.CRITICAL) !== 0 && critRule === CriticalRules.HOMEBREW_MAX) continue;
+
+                const is2HOnly = (flags & DAMAGE_FLAGS.VERSATILE) !== 0 && (flags & DAMAGE_FLAGS.REGULAR) === 0;
+                const is1HOnly = (flags & DAMAGE_FLAGS.REGULAR) !== 0 && (flags & DAMAGE_FLAGS.VERSATILE) === 0;
+
+                for (const d of rollObj.dice) {
+                    for (const r of (d.rolls || [])) {
+                        if (!r.discarded) {
+                            const dieObj = {
+                                faces: parseInt(d.faces),
+                                val: parseInt(r.roll),
+                                dmgType: String(dmgType || ""),
+                                originFlags: flags
+                            };
+                            if (!is2HOnly) dice1H.push(dieObj);
+                            if (!is1HOnly) dice2H.push(dieObj);
+                        }
+                    }
+                }
+            }
+
+            const rules1H = activeRules.map(r => r.clone());
+            const rules2H = activeRules.map(r => r.clone());
+
+            await runPass(dice1H, rules1H, "1-Hand");
+            await runPass(dice2H, rules2H, "2-Hand");
+        } else {
+            const allDice = [];
+            for (const [dmgType, rollObj, flags] of damage_rolls) {
+                if (!rollObj || !rollObj.dice) continue;
+                if ((flags & DAMAGE_FLAGS.CRITICAL) !== 0 && critRule === CriticalRules.HOMEBREW_MAX) continue;
+
+                for (const d of rollObj.dice) {
+                    for (const r of (d.rolls || [])) {
+                        if (!r.discarded) {
+                            allDice.push({
+                                faces: parseInt(d.faces),
+                                val: parseInt(r.roll),
+                                dmgType: String(dmgType || ""),
+                                originFlags: flags
+                            });
+                        }
+                    }
+                }
+            }
+            await runPass(allDice, activeRules, "");
         }
     }
 }

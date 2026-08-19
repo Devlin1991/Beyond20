@@ -42,7 +42,8 @@ Google's Antigravity CLI tool was used to implement fixes and features specified
   - In `rollItem`: strips weapon ability modifiers from cantrip bonus dice so only the spell damage die is added.
   - Updates roll title to include the spell name (e.g., `Longsword (Green-Flame Blade)`).
 - **Renderer Integration** (`src/common/roll_renderer.js`):
-  - Added *Burning Blade* exploding dice rule via `ExplodingRule`.
+  - Added *Burning Blade* exploding dice rule via `ExplodingRule`, normalizing explode bursts to `Fire` damage.
+  - Consolidates multiple *Burning Blade* explosions into a single line (e.g. `Fire (Burning Blade Explode x2) Damage: 12`) with full hover tooltip breakdown.
   - Added `BLADE_CANTRIPS_LIST` to `isPrimarySpellOrFeat()` to prevent cantrip damage from being marked conditional.
 - **Documentation** (`docs/features.md`): Added `Spells: Blade Cantrips & Heroic Sorcery`.
 
@@ -53,7 +54,7 @@ Google's Antigravity CLI tool was used to implement fixes and features specified
    - Verify the bonus spell damage die is added cleanly without duplicate ability modifiers.
 3. Test **Arc Blade**: Verify prompt for Melee vs Ranged (15 ft) mode appears and sets range/attack type correctly.
 4. Test **Frigid Blade**: Verify weapon die steps up (e.g. 1d8 $\to$ 1d10).
-5. Test **Burning Blade**: Verify max die rolls trigger exploding fire dice up to spellcasting modifier.
+5. Test **Burning Blade**: Verify max die rolls trigger exploding fire dice up to spellcasting modifier, grouped into a single line with `x{count}` when multiple dice explode.
 
 ## Reviewer notes
 <!-- Anything you want reviewers to pay attention to: tricky logic, follow-ups, tradeoffs -->
