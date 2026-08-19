@@ -1125,14 +1125,6 @@ async function rollItem(force_display = false, force_to_hit_only = false, force_
                 let damage_type = properties["Damage Type"] || "";
                 let versatile_damage = value.find(".ct-item-detail__versatile-damage,.ddbc-item-detail__versatile-damage").text().slice(1, -1);
 
-                if(damages.length == 0) {
-                    if (versatile_damage != "") {
-                        versatile_damage = applyGWFIfRequired(item_name, properties, versatile_damage);
-                    } else {
-                        damage = applyGWFIfRequired(item_name, properties, damage);
-                    }
-                }
-
                 if (character.hasClass("Ranger") &&
                     character.hasClassFeature("Planar Warrior") &&
                     character.getSetting("ranger-planar-warrior", false))
@@ -1141,12 +1133,30 @@ async function rollItem(force_display = false, force_to_hit_only = false, force_
                 if (versatile_damage != "" && damage_type != "--") {
                     let versatile_choice = character.getSetting("versatile-choice", "both");
                     if (key_modifiers.versatile_one_handed)
-                        versatile_choice = "one"
+                        versatile_choice = "one";
                     if (key_modifiers.versatile_two_handed)
                         versatile_choice = "two";
                     if (force_versatile) {
                         versatile_choice = "two";
                     }
+                    if (versatile_choice == "query") {
+                        versatile_choice = await dndbeyondDiceRoller.queryGeneric(
+                            item_name,
+                            "How are you wielding this weapon?",
+                            { "one": "One-Handed", "two": "Two-Handed", "both": "Both (Separately)" },
+                            "versatile_choice",
+                            ["one", "two", "both"]
+                        );
+                        if (versatile_choice === null) return;
+                    }
+
+                    if (damages.length == 0) {
+                        if (versatile_damage != "") {
+                            versatile_damage = applyGWFIfRequired(item_name, properties, versatile_damage, versatile_choice);
+                        }
+                        damage = applyGWFIfRequired(item_name, properties, damage, versatile_choice);
+                    }
+
                     if (versatile_choice == "one") {
                         damages.push(damage);
                         if (character.getGlobalSetting("weapon-handedness", false)){
@@ -1169,6 +1179,9 @@ async function rollItem(force_display = false, force_to_hit_only = false, force_
                         is_versatile = true;
                     }
                 } else if (damage != "" && damage_type != "--") {
+                    if (damages.length == 0) {
+                        damage = applyGWFIfRequired(item_name, properties, damage);
+                    }
                     damages.push(damage);
                     damage_types.push(damage_type);
                 }

@@ -513,9 +513,10 @@ function ensureModifier(damageStr, modValue) {
     return `${damageStr}${sign}${modValue}`;
 }
 
-function applyGWFIfRequired(action_name, properties, damage) {
+function applyGWFIfRequired(action_name, properties, damage, versatile_choice = null) {
+    const vChoice = versatile_choice || character.getSetting("versatile-choice");
     if((properties["Attack Type"] == "Melee" && 
-        ((properties["Properties"].includes("Versatile") && character.getSetting("versatile-choice") != "one") || 
+        ((properties["Properties"].includes("Versatile") && vChoice != "one") || 
             properties["Properties"].includes("Two-Handed"))) ||
             (action_name.includes("Polearm Master") && character.hasFeat("Polearm Master", false)) ||
             (action_name.includes("Pole Strike") && character.hasFeat("Polearm Master 2024", false))

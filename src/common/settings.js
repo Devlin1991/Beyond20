@@ -487,7 +487,8 @@ const character_settings = {
         "choices": {
             "both": "Roll both damages separately",
             "one": "Use weapon One-handed",
-            "two": "Use weapon Two-handed"
+            "two": "Use weapon Two-handed",
+            "query": "Query 1-Handed / 2-Handed"
         }
     },
     "toll-choice": {
