@@ -479,6 +479,12 @@ const character_settings = {
         "hidden": true,
         "default": false
     },
+    "pyromaniac-fire-dice-only": {
+        "title": "Pyromaniac: Limit flares to Fire damage dice",
+        "description": "When enabled, Pyromaniac flares can only trigger on dice that deal Fire damage, rather than any die in an attack that includes Fire damage.",
+        "type": "boolean",
+        "default": false
+    },
     "versatile-choice": {
         "title": "Versatile weapon choice",
         "description": "How to roll damage for Versatile weapons",

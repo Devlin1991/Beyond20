@@ -91,6 +91,7 @@ See the [Screenshots](screenshots) page for a video tour of some of the features
 * Feat: Flames of Phlegethos
 * Feat: Polearm Master
 * Feat: Healer 2024
+* Feat: Pyromaniac
 * Aasimar: Radiant Soul
 * Bugbear: Surprise Attack
 * Artificer: Arcane Firearm

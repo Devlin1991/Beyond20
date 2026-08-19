@@ -40,7 +40,8 @@ class ExplodingRule {
 
 function isPrimarySpellOrFeat(dmg_type) {
     if (!dmg_type) return false;
-    return dmg_type.includes("Sorcerous Burst") ||
+    return dmg_type.includes("Pyromaniac") ||
+           dmg_type.includes("Sorcerous Burst") ||
            dmg_type.includes("Sneak Attack") ||
            dmg_type.includes("Flame Tongue") ||
            dmg_type.includes("ablaze") ||
@@ -920,9 +921,26 @@ class Beyond20RollRenderer {
                 await this._roller.resolveRolls(request.name, critical_damage_rolls, request);
             }
             
-            // Process exploding dice rules (Sorcerous Burst, etc.)
+            // Process exploding dice rules (Pyromaniac, Sorcerous Burst, etc.)
             const activeRules = [];
             const charObj = request.character || {};
+            const feats = charObj.feats || [];
+            const hasPyromaniac = feats.some(f => String(f).toLowerCase().includes("pyromaniac"));
+
+            if (hasPyromaniac) {
+                const hasFireDamage = damage_rolls.some(([dmgType, rollObj, flags]) => 
+                    !(flags & DAMAGE_FLAGS.CONDITIONAL) && String(dmgType || "").toLowerCase().includes("fire")
+                );
+                if (hasFireDamage) {
+                    const profBonus = parseInt(charObj.proficiency) || 2;
+                    const fireOnly = (this._settings["pyromaniac-fire-dice-only"] || false) === true;
+                    activeRules.push(new ExplodingRule({
+                        name: "Pyromaniac Flare",
+                        limit: profBonus,
+                        damageTypeFilter: fireOnly ? "Fire" : null
+                    }));
+                }
+            }
 
             if (request.name && request.name.includes("Sorcerous Burst")) {
                 const mods = charObj.spell_modifiers || {};
@@ -1177,6 +1195,9 @@ class Beyond20RollRenderer {
                         if (die.originFlags & DAMAGE_FLAGS.CRITICAL) burstFlags |= DAMAGE_FLAGS.CRITICAL;
 
                         let baseDmgType = die.dmgType.split("(")[0].trim().replace(/(\s*Damage)+$/i, "") || "Damage";
+                        if (rule.name === "Pyromaniac Flare") {
+                            baseDmgType = "Fire";
+                        }
                         const handTag = handType ? ` (${handType})` : (die.dmgType.includes("(1-Hand)") ? " (1-Hand)" : (die.dmgType.includes("(2-Hand)") ? " (2-Hand)" : ""));
 
                         const ruleKey = `${rule.name}__${baseDmgType}__${handTag}`;
