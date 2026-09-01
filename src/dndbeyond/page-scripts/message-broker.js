@@ -117,9 +117,19 @@ if (!window.__beyond20_mb2_initialized__) {
             "death-save": "save",
         };
 
+        function cleanDdbDamageType(dt) {
+            if (!dt) return "damage";
+            let clean = String(dt).trim();
+            if (clean.includes("(")) {
+                clean = clean.split("(")[0].trim();
+            }
+            clean = clean.replace(/(\s*Damage)+$/i, "").trim();
+            return clean.toLowerCase() || "damage";
+        }
+
         let rollType = rollToType[roll.type] || "roll";
         if (damageType && (roll.type === "damage" || roll.type === "critical-damage")) {
-            rollType = damageType;
+            rollType = cleanDdbDamageType(damageType);
         }
 
         const data = {
@@ -152,6 +162,69 @@ if (!window.__beyond20_mb2_initialized__) {
         return data;
     }
 
+    function combineDamageRolls(damageRolls, damageTypes = []) {
+        if (!damageRolls || damageRolls.length === 0) return null;
+        if (damageRolls.length === 1) {
+            return rollToDDBRoll(damageRolls[0], true, damageTypes[0] || null);
+        }
+
+        let totalConstant = 0;
+        let totalSum = 0;
+        const allSets = [];
+        const allResults = [];
+        const textParts = [];
+        const formulaParts = [];
+        const cleanTypes = [];
+
+        for (let i = 0; i < damageRolls.length; i++) {
+            const roll = damageRolls[i];
+            const dt = damageTypes[i] || "";
+            const cleanDt = cleanDdbDamageType(dt);
+            if (cleanDt && !cleanTypes.includes(cleanDt)) {
+                cleanTypes.push(cleanDt);
+            }
+
+            const ddbRoll = rollToDDBRoll(roll, true, dt);
+            if (ddbRoll.diceNotation) {
+                totalConstant += ddbRoll.diceNotation.constant || 0;
+                if (Array.isArray(ddbRoll.diceNotation.set)) {
+                    allSets.push(...ddbRoll.diceNotation.set);
+                }
+            }
+            if (ddbRoll.result) {
+                totalSum += ddbRoll.result.total || 0;
+                if (Array.isArray(ddbRoll.result.values)) {
+                    allResults.push(...ddbRoll.result.values);
+                }
+                if (ddbRoll.result.text) {
+                    textParts.push(ddbRoll.result.text);
+                }
+            }
+            if (roll.formula) {
+                formulaParts.push(roll.formula);
+            }
+        }
+
+        const isCrit = damageRolls.some(r => r.type === "critical-damage");
+        const rollType = cleanTypes.length === 1 ? cleanTypes[0] : "damage";
+
+        return {
+            diceNotation: {
+                constant: totalConstant,
+                set: allSets
+            },
+            diceNotationStr: formulaParts.join(" + "),
+            rollKind: isCrit ? "critical hit" : "",
+            rollType: rollType,
+            result: {
+                constant: totalConstant,
+                text: textParts.join(" + "),
+                total: totalSum,
+                values: allResults
+            }
+        };
+    }
+
     function b20BuildDdbRollsForGameLog(b20Rolls, request = {}) {
         const rolls = Array.isArray(b20Rolls) ? b20Rolls : [];
         if (!rolls.length) return [];
@@ -164,30 +237,42 @@ if (!window.__beyond20_mb2_initialized__) {
         
         const damageTypes = request["damage-types"] || [];
 
-        if (!isAdvantage && !isDisadvantage && !isSuperAdvantage && !isSuperDisadvantage) {
-            let damageTypeIndex = 0;
-            return rolls.map((r) => {
-                const isDamageRoll = r.type === "damage" || r.type === "critical-damage";
-                const dt = isDamageRoll ? damageTypes[damageTypeIndex++] : null;
-                return rollToDDBRoll(r, true, dt);
-            });
-        }
+        const d20Rolls = [];
+        const damageRolls = [];
+        const otherRolls = [];
 
-        const [d20Rolls, otherRolls] = [[], []];
         for (const roll of rolls) {
-            ((roll.parts || []).some(p => p?.faces === 20) ? d20Rolls : otherRolls).push(roll);
+            if (roll.type === "to-hit" || (roll.parts || []).some(p => p?.faces === 20)) {
+                d20Rolls.push(roll);
+            } else if (roll.type === "damage" || roll.type === "critical-damage") {
+                damageRolls.push(roll);
+            } else {
+                otherRolls.push(roll);
+            }
         }
 
-        const isAdv = isAdvantage || isSuperAdvantage;
+        const result = [];
+
+        if (d20Rolls.length > 0) {
+            if (isAdvantage || isDisadvantage || isSuperAdvantage || isSuperDisadvantage) {
+                const isAdv = isAdvantage || isSuperAdvantage;
+                result.push(combineD20Rolls(d20Rolls, isAdv, isSuperAdvantage || isSuperDisadvantage));
+            } else {
+                result.push(rollToDDBRoll(d20Rolls[0], true, null));
+            }
+        }
+
         let damageTypeIndex = 0;
-        return [
-            ...(d20Rolls.length ? [combineD20Rolls(d20Rolls, isAdv, isSuperAdvantage || isSuperDisadvantage)] : []),
-            ...otherRolls.map((r) => {
-                const isDamageRoll = r.type === "damage" || r.type === "critical-damage";
-                const dt = isDamageRoll ? damageTypes[damageTypeIndex++] : null;
-                return rollToDDBRoll(r, true, dt);
-            })
-        ];
+        for (const dmgRoll of damageRolls) {
+            const dt = damageTypes[damageTypeIndex++];
+            result.push(rollToDDBRoll(dmgRoll, true, dt));
+        }
+
+        for (const r of otherRolls) {
+            result.push(rollToDDBRoll(r, true, null));
+        }
+
+        return result;
     }
 
     function combineD20Rolls(d20Rolls, isAdvantage, isSuper = false, options = {}) {
@@ -376,15 +461,15 @@ if (!window.__beyond20_mb2_initialized__) {
 
             const base = entry.ddbFulfilled;
             if (!base) return _dispatchOriginalFulfilled(entry, idx);
-            if (!entry.rollData) return _dispatchOriginalFulfilled(entry, idx);
+            const rolls = b20BuildDdbRollsForGameLog(
+                entry.rollData.rolls || [],
+                entry.request || {}
+            );
 
             const patched = cloneMessage(base);
             patched.data = patched.data || {};
             patched.data.action = normalizeActionName(entry.action || patched.data.action);
-            patched.data.rolls = b20BuildDdbRollsForGameLog(
-                entry.rollData.rolls || [],
-                entry.request || {}
-            );
+            patched.data.rolls = rolls;
             patched.data[B20_OVERRIDE_MARKER] = true;
 
             if (messageBroker._mbDispatch) messageBroker._mbDispatch(patched);
@@ -404,10 +489,10 @@ if (!window.__beyond20_mb2_initialized__) {
         window[HOOKS_INSTALLED_KEY] = true;
 
         const bindRollIdIfNeeded = (message) => {
-            const head = b20OverrideQueue[0];
             const rid = message?.data?.rollId;
-            if (!head || head.rollId || !rid) return;
-            head.rollId = rid;
+            if (!rid) return;
+            const entry = b20OverrideQueue.find(e => !e.rollId);
+            if (entry) entry.rollId = rid;
         };
 
         // Let deferred/pending flow normally so DDB can mint the native rollId/context
@@ -428,6 +513,9 @@ if (!window.__beyond20_mb2_initialized__) {
             let queueIdx = -1;
             if (rid && b20OverrideQueue.length) {
                 queueIdx = b20OverrideQueue.findIndex(e => e.rollId === rid);
+            }
+            if (queueIdx === -1 && b20OverrideQueue.length) {
+                queueIdx = b20OverrideQueue.findIndex(e => !e.ddbFulfilled);
             }
             
             // If no matching queue entry, this is a dice toolbox roll - allow through
@@ -487,7 +575,8 @@ if (!window.__beyond20_mb2_initialized__) {
         if (!rollData) return;
         if (!b20OverrideQueue.length) return;
 
-        const entry = b20OverrideQueue[0];
+        const entry = b20OverrideQueue.find(e => !e.rollData) || b20OverrideQueue[0];
+        const idx = b20OverrideQueue.indexOf(entry);
         entry.rollData = rollData;
 
         if (rollData.request) {
@@ -495,7 +584,7 @@ if (!window.__beyond20_mb2_initialized__) {
         }
 
         if (entry.ddbFulfilled) {
-            _dispatchOverrideFulfilled(entry, 0);
+            _dispatchOverrideFulfilled(entry, idx >= 0 ? idx : 0);
         }
     }
 

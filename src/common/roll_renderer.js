@@ -790,11 +790,16 @@ class Beyond20RollRenderer {
         let is_critical = false;
         if (request.rollAttack && request["to-hit"] !== undefined) {
             const custom = custom_roll_dice == "" ? "" : (" + " + custom_roll_dice);
-            const to_hit_mod = (request["to-hit"]?.trim() ? (["+", "-"].includes(request["to-hit"].trim()[0]) ? " " : " + ") + request["to-hit"].trim() : "") + (custom?.trim() ||
- "");
-            const {rolls} = this.getToHit(request, to_hit_mod)
+            const to_hit_mod = (request["to-hit"]?.trim() ? (["+", "-"].includes(request["to-hit"].trim()[0]) ? " " : " + ") + request["to-hit"].trim() : "") + (custom?.trim() || "");
+            const {rolls} = this.getToHit(request, to_hit_mod);
             to_hit.push(...rolls);
-            all_rolls.push(...rolls);
+            await this._roller.resolveRolls(request.name, to_hit, request);
+
+            this.processToHitAdvantage(request.advantage, to_hit);
+            const critical_limit = request["critical-limit"] || 20;
+            is_critical = this.isCriticalHitD20(to_hit, critical_limit);
+        } else {
+            is_critical = request.rollCritical;
         }
 
         if (request.rollDamage && request.damages !== undefined) {
@@ -860,7 +865,11 @@ class Beyond20RollRenderer {
                 if (damages[i].trim()) {
                     const roll = this._roller.roll(damages[i]);
                     roll.setRollType("damage");
-                    all_rolls.push(roll);
+                    const dmgReq = {
+                        ...request,
+                        "damage-types": [dmg_type]
+                    };
+                    await this._roller.resolveRolls(request.name, [roll], dmgReq);
                     damage_rolls.push([dmg_type + suffix, roll, damage_flags]);
                 }
                 // Handle life transference;
@@ -870,10 +879,8 @@ class Beyond20RollRenderer {
                     damage_rolls.push(["Healing", "Half the Necrotic damage", DAMAGE_FLAGS.HEALING]);
                 }
             }
-        
-            await this._roller.resolveRolls(request.name, all_rolls, request)
             
-            // Moved after the new resolveRolls so it can access the roll results
+            // Moved after resolveRolls so it can access the roll results
             if (request.name.includes("Chaos Bolt")) {
                 for (let [i, dmg_roll] of damage_rolls.entries()) {
                     const [dmg_type, roll, flags] = dmg_roll;
@@ -882,7 +889,6 @@ class Beyond20RollRenderer {
                         const damage_choices = {}
                         for (let r of roll.dice[0].rolls)
                             damage_choices[chaos_bolt_damages[r.roll - 1]] = null;
-                        //console.log("Damage choices : ", damage_choices, damage_choices.length);
                         let chaotic_type = null;
                         if (Object.keys(damage_choices).length == 1) {
                             damage_rolls.push(["Chaotic energy leaps from the target to a different creature of your choice within 30 feet of it", "", DAMAGE_FLAGS.MESSAGE]);
@@ -890,7 +896,6 @@ class Beyond20RollRenderer {
                         } else {
                             chaotic_type = await this.queryDamageType(request.name, damage_choices, "chaos-bolt");
                             if (chaotic_type === null) {
-                                // Query was cancelled
                                 chaotic_type = Object.keys(damage_choices)[0];
                             }
                         }
@@ -902,15 +907,6 @@ class Beyond20RollRenderer {
                     }
                 }
             }
-
-            // If rolling the attack, check for critical hit, otherwise, use argument.
-            if (request.rollAttack && to_hit.length > 0) {
-                this.processToHitAdvantage(request.advantage, to_hit)
-                const critical_limit = request["critical-limit"] || 20;
-                is_critical = this.isCriticalHitD20(to_hit, critical_limit);
-            } else {
-                is_critical = request.rollCritical;
-            }
             
             const conditional_indices = new Set();
             for (let i = 0; i < damage_rolls.length; i++) {
@@ -920,7 +916,6 @@ class Beyond20RollRenderer {
             }
             
             if (is_critical) {
-                const critical_damage_rolls = []
                 const seen_critical_other_damages = {};
                 const critical_spell_damage_counts = {};
                 for (let i = 0; i < (critical_damages.length); i++) {
@@ -937,7 +932,6 @@ class Beyond20RollRenderer {
                     }
                     const roll = this._roller.roll(critical_damages[i]);
                     roll.setRollType("critical-damage");
-                    critical_damage_rolls.push(roll);
                     const dmg_type = critical_damage_types[i];
                     let damage_flags = DAMAGE_FLAGS.REGULAR;
                     if (["Healing", "Temp HP", "Alchemical Savant Healing", "Enhanced Bond Healing", "Spiritual Focus Healing"].includes(dmg_type)) {
@@ -977,10 +971,15 @@ class Beyond20RollRenderer {
                         }
                     }
 
+                    const critReq = {
+                        ...request,
+                        "damage-types": [dmg_type]
+                    };
+                    await this._roller.resolveRolls(request.name, [roll], critReq);
+
                     const suffix = !(damage_flags & DAMAGE_FLAGS.HEALING) ? " Critical Damage" : "";
                     damage_rolls.push([dmg_type + suffix, roll, damage_flags | DAMAGE_FLAGS.CRITICAL]);
                 }
-                await this._roller.resolveRolls(request.name, critical_damage_rolls, request);
             }
             
             // Process exploding dice rules (Pyromaniac, Burning Blade, Sorcerous Burst, etc.)
@@ -1023,14 +1022,6 @@ class Beyond20RollRenderer {
             if (activeRules.length > 0) {
                 await this.processAllExplodingDice(request, damage_rolls, is_critical, activeRules);
             }
-        } else {
-            // If no damages, still need to resolve to hit rolls
-            
-            await this._roller.resolveRolls(request.name, all_rolls, request)
-            if (to_hit.length > 0)
-                this.processToHitAdvantage(request.advantage, to_hit)
-            const critical_limit = request["critical-limit"] || 20;
-            this.isCriticalHitD20(to_hit, critical_limit);
         }
 
         return [to_hit, damage_rolls];
@@ -1241,10 +1232,16 @@ class Beyond20RollRenderer {
                     if (rule.canTrigger(die.dmgType, die.faces, die.val)) {
                         rule.remaining--;
 
+                        let baseDmgType = die.dmgType.split("(")[0].trim().replace(/(\s*Damage)+$/i, "") || "Damage";
+
                         const amount = 1;
                         const burstRoll = this._roller.roll(`${amount}d${die.faces}`);
                         burstRoll.setRollType("damage");
-                        await this._roller.resolveRolls(request.name, [burstRoll], request);
+                        const burstRequest = {
+                            ...request,
+                            "damage-types": [baseDmgType]
+                        };
+                        await this._roller.resolveRolls(request.name, [burstRoll], burstRequest);
 
                         let burstFlags = DAMAGE_FLAGS.ADDITIONAL;
                         if (handType === "1-Hand") {
@@ -1257,10 +1254,6 @@ class Beyond20RollRenderer {
                         }
                         if (die.originFlags & DAMAGE_FLAGS.CRITICAL) burstFlags |= DAMAGE_FLAGS.CRITICAL;
 
-                        let baseDmgType = die.dmgType.split("(")[0].trim().replace(/(\s*Damage)+$/i, "") || "Fire";
-                        if (rule.name === "Pyromaniac Flare" || rule.name === "Burning Blade Explode") {
-                            baseDmgType = "Fire";
-                        }
                         const handTag = handType ? ` (${handType})` : (die.dmgType.includes("(1-Hand)") ? " (1-Hand)" : (die.dmgType.includes("(2-Hand)") ? " (2-Hand)" : ""));
 
                         const ruleKey = `${rule.name}__${baseDmgType}__${handTag}`;
